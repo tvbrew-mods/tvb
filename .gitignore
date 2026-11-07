@@ -1,0 +1,10 @@
+# File locali, da non pubblicare
+CLAUDE.md
+.claude/
+
+# File di sistema / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+node_modules/
