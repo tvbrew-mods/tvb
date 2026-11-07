@@ -5,11 +5,12 @@
  * Features:
  *  - spatial navigation: the arrow keys highlight links, buttons and fields;
  *    OK activates the highlighted element; the page scrolls when nothing is left
- *  - virtual cursor (TOOLS or 8): arrows move a pointer, OK clicks, edges scroll
- *  - key guide (INFO or 9)
- *  - YELLOW: back to the TVB home page, GREEN: add the page to the bookmarks
- *  - RETURN: close panels, leave an iframe, or go back
- *  - debug overlay (0), hidden by default
+ *  - virtual cursor (TOOLS): arrows move a pointer, OK clicks, edges scroll
+ *  - key guide (GUIDE), debug overlay (INFO, hidden by default)
+ *  - YELLOW (C): back to the TVB home page, GREEN (B): add the page to the bookmarks
+ *  - RED (A): detected video in full screen; play / pause / rewind / fast forward keys
+ *  - RETURN: leave full screen, close panels, leave an iframe, or go back
+ *  - loading bar, white background for pages that set none
  *  - keys received inside iframes are forwarded to the main page
  *
  * Written in plain ES5 for the old Chromium engine of Tizen TVs.
@@ -19,7 +20,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.1.0';
+  var VERSION = '0.1.1';
   var MODULE_ID = 'gh/tvbrew-mods/tvb@v' + VERSION;
   // TVB home page, served by TizenBrew's local module proxy
   var HOME_URL = 'http://127.0.0.1:8081/module/' + encodeURIComponent(MODULE_ID) + '/home.html';
@@ -28,7 +29,7 @@
   var MAX_SEEN_URLS = 300;      // media URLs remembered to avoid duplicates
   var TICK_MS = 1000;           // periodic refresh
   var EXIT_CONFIRM_MS = 5000;
-  var BOOKMARK_TIMEOUT_MS = 5000;
+  var BOOKMARK_TIMEOUT_MS = 8000; // the home page retries the service for a few seconds
   var CURSOR_STEP = 14;         // px per key press, multiplied by the acceleration
   var CURSOR_MAX_ACCEL = 5;
   var EDGE_SCROLL = 160;        // px scrolled when the cursor pushes an edge
@@ -36,29 +37,37 @@
   var KEY = {
     LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, OK: 13,
     BACK: 10009, RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406,
-    TOOLS: 10135, INFO: 457
+    TOOLS: 10135, INFO: 457, GUIDE: 458,
+    PLAY: 415, PAUSE: 19, REWIND: 412, FAST_FORWARD: 417
   };
   var DIR_BY_KEY = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
+  var SEEK_SECONDS = 10;
 
-  var FOCUSABLE = 'a[href], button, input, select, textarea, summary, iframe, ' +
+  var FOCUSABLE = 'a[href], button, input, select, textarea, summary, iframe, video, ' +
     '[tabindex], [onclick], [role="button"], [role="link"], [role="menuitem"], ' +
     '[role="tab"], [role="option"], [role="checkbox"], [contenteditable="true"]';
 
   var MEDIA_RE = /\.(m3u8|mpd|mp4|webm|m4s|ts)(\?|#|$)/i;
   var SEGMENT_RE = /\.(m4s|ts)(\?|#|$)/i;
 
+  var ACCENT = '#2f9bff';  // highlight, cursor and loading bar
+
+  // Each row: [keys drawn like the remote buttons, description]
   var GUIDE = [
-    ['Frecce', 'evidenziano link e pulsanti (la pagina scorre quando non ce ne sono altri)'],
-    ['OK', 'apre o preme l\'elemento evidenziato'],
-    ['TOOLS (o 8)', 'attiva / disattiva il cursore'],
-    ['Cursore', 'frecce per muoverlo, OK per cliccare, ai bordi la pagina scorre'],
-    ['C (giallo)', 'torna alla home'],
-    ['B (verde)', 'aggiunge la pagina ai preferiti'],
-    ['RETURN', 'indietro (o chiude la guida, esce da un riquadro)'],
-    ['INFO (o 9)', 'apre / chiude questa guida'],
-    ['0', 'informazioni di debug'],
-    ['EXIT', 'esce dall\'app']
+    [['◀', '▲', '▼', '▶'], 'evidenziano link, pulsanti e campi'],
+    [['OK'], 'apre o preme l\'elemento evidenziato'],
+    [['TOOLS'], 'cursore: frecce per muoverlo, OK per cliccare'],
+    [['B'], 'aggiunge la pagina ai preferiti'],
+    [['C'], 'torna alla home'],
+    [['A'], 'video a schermo intero'],
+    [['▶', 'II'], 'play / pausa del video'],
+    [['◀◀', '▶▶'], 'indietro / avanti di 10 secondi'],
+    [['RETURN'], 'indietro (esce da schermo intero, guida, riquadri)'],
+    [['GUIDE'], 'questa guida'],
+    [['INFO'], 'informazioni tecniche (debug)'],
+    [['EXIT'], 'esce dall\'app']
   ];
+  var CHIP_COLORS = { A: '#d6453f', B: '#3B9B3B', C: '#e0b400', D: '#378ADD', OK: '#ffffff' };
 
   var w = window;
 
@@ -221,6 +230,27 @@
     return el;
   }
 
+  // "Liquid glass" look without backdrop blur (not supported by the TV engine):
+  // dark frosted tint, light rim, soft shadow. "opacity" keeps text readable over any page.
+  function glassStyle(s, opacity) {
+    s.background = 'linear-gradient(180deg, rgba(60, 62, 72, ' + opacity + '), rgba(28, 30, 38, ' + opacity + '))';
+    s.border = '1px solid rgba(255, 255, 255, 0.16)';
+    s.boxShadow = '0 18px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.4)';
+    s.textShadow = '0 1px 3px rgba(0, 0, 0, 0.6)';
+  }
+
+  // Pages with a viewport (e.g. Wikipedia) are scaled up by the TV: keep our elements the same size
+  function scaleFactor() {
+    var width = viewport().w;
+    return width < 1900 ? width / 1920 : 1;
+  }
+
+  function applyScaleTo(el, baseFontPx) {
+    if (el) {
+      el.style.fontSize = Math.max(9, Math.round(baseFontPx * scaleFactor())) + 'px';
+    }
+  }
+
   function attach(el) {
     var root = getRoot();
     if (root && el.parentNode !== root) {
@@ -343,17 +373,18 @@
       notice = makeLayer('notice', 2147483647);
       var s = notice.style;
       s.left = '50%';
-      s.bottom = '7%';
-      s.width = '1000px';
-      s.marginLeft = '-500px';
-      s.padding = '18px 24px';
-      s.fontSize = '28px';
+      s.bottom = '6%';
+      s.webkitTransform = 'translateX(-50%)';
+      s.transform = 'translateX(-50%)';
+      s.padding = '12px 26px';
+      s.fontSize = '22px';
+      s.whiteSpace = 'nowrap';
       s.textAlign = 'center';
       s.color = '#ffffff';
-      s.background = 'rgba(20, 22, 28, 0.94)';
-      s.border = '2px solid #ffd600';
-      s.borderRadius = '12px';
+      glassStyle(s, 0.58);
+      s.borderRadius = '9999px';
     }
+    applyScaleTo(notice, 22);
     notice.textContent = text;
     attach(notice);
     if (noticeTimer) {
@@ -487,8 +518,17 @@
     var v = viewport();
     if (inDocument(current)) {
       var r = current.getBoundingClientRect();
-      if (r.bottom > 0 && r.top < v.h && r.right > 0 && r.left < v.w) {
+      var onScreen = r.bottom > 0 && r.top < v.h && r.right > 0 && r.left < v.w;
+      // A huge element (e.g. a banner covering the page) would leave nothing "beyond" it:
+      // start from a point instead
+      var huge = r.width * r.height > 0.3 * v.w * v.h || r.height > 0.6 * v.h;
+      if (onScreen && !huge) {
         return r;
+      }
+      if (onScreen && huge && lastCenter) {
+        var px = Math.min(Math.max(lastCenter.x, 0), v.w);
+        var py = Math.min(Math.max(lastCenter.y, 0), v.h);
+        return { left: px, right: px, top: py, bottom: py, width: 0, height: 0 };
       }
     }
     var x = lastCenter ? Math.min(Math.max(lastCenter.x, 0), v.w) : 0;
@@ -522,6 +562,12 @@
         ensureVisible(scored[j].el);
         return true;
       }
+    }
+    // Everything looked covered (the check can be wrong on some pages): take the nearest anyway
+    if (scored.length && scored[0].score < viewport().h) {
+      setCurrent(scored[0].el);
+      ensureVisible(scored[0].el);
+      return true;
     }
     return scrollPage(dir, null);
   }
@@ -611,15 +657,17 @@
   function updateRing() {
     if (!ring) {
       ring = makeLayer('ring', 2147483646);
-      ring.style.border = '4px solid #ffd600';
+      ring.style.border = '4px solid ' + ACCENT;
       ring.style.borderRadius = '6px';
-      ring.style.boxShadow = '0 0 0 2px rgba(0, 0, 0, 0.7)';
+      ring.style.boxShadow = '0 0 0 2px rgba(0, 0, 0, 0.6)';
     }
-    if (cursorMode || !inDocument(current)) {
+    // While typing, the ring follows the active text field
+    var target = isEditable(document.activeElement) ? document.activeElement : current;
+    if (cursorMode || !inDocument(target)) {
       detach(ring);
       return;
     }
-    var r = current.getBoundingClientRect();
+    var r = target.getBoundingClientRect();
     var v = viewport();
     if (r.bottom < 0 || r.top > v.h || r.right < 0 || r.left > v.w) {
       detach(ring);
@@ -658,12 +706,18 @@
     if (tag === 'IFRAME') {
       enterFrame(el);
     } else if (isEditable(el)) {
-      el.focus(); // the TV keyboard opens
+      startTyping(el); // the TV keyboard opens
+    } else if (tag === 'VIDEO') {
+      if (el.paused) {
+        try { el.play(); } catch (e) { /* ignore */ }
+      } else {
+        el.pause();
+      }
     } else if (tag === 'SELECT') {
       el.focus();
       fireMouse(el, 'mousedown', x, y);
     } else if (tag === 'A' && el.target === '_blank' && /^https?:/.test(el.href)) {
-      w.location.href = el.href; // never open new windows
+      navigate(el.href); // never open new windows
     } else {
       if (typeof el.focus === 'function') {
         try { el.focus(); } catch (e) { /* ignore */ }
@@ -708,11 +762,37 @@
       postTo(el.contentWindow, 'clickAt', { x: Math.round(x - r.left - bx), y: Math.round(y - r.top - by) });
       return 'iframe';
     }
-    if (isEditable(el)) {
-      el.focus();
-    }
     clickElement(el, x, y);
+    if (isEditable(el)) {
+      startTyping(el);
+    }
     return describeElement(el);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Text fields. A field counts as "typing" only when the user opened it (OK or
+  // cursor click), not when the page focused it by itself (autofocus).
+  // ---------------------------------------------------------------------------
+  var typingTarget = null;
+
+  function startTyping(el) {
+    typingTarget = el;
+    try { el.focus(); } catch (e) { /* ignore */ }
+    updateRing();
+  }
+
+  function isTyping() {
+    var active = document.activeElement;
+    return !!active && isEditable(active) && active === typingTarget;
+  }
+
+  function stopTyping() {
+    var active = document.activeElement;
+    typingTarget = null;
+    if (active && isEditable(active)) {
+      try { active.blur(); } catch (e) { /* ignore */ }
+    }
+    updateRing();
   }
 
   // ---------------------------------------------------------------------------
@@ -831,46 +911,64 @@
     }
     guide = makeLayer('guide', 2147483647);
     var s = guide.style;
+    var k = scaleFactor();
     s.left = '50%';
     s.top = '50%';
-    s.width = '1200px';
-    s.marginLeft = '-600px';
-    s.marginTop = '-380px';
-    s.padding = '32px 40px';
-    s.background = 'rgba(20, 22, 28, 0.97)';
+    s.webkitTransform = 'translate(-50%, -50%)';
+    s.transform = 'translate(-50%, -50%)';
+    s.width = Math.round(1150 * k) + 'px';
+    s.padding = Math.round(28 * k) + 'px ' + Math.round(36 * k) + 'px';
     s.color = '#ffffff';
-    s.border = '2px solid #3d4150';
-    s.borderRadius = '16px';
-    s.fontSize = '26px';
+    glassStyle(s, 0.84); // sites can be bright and busy: a bit more tint than the home
+    s.borderRadius = Math.round(28 * k) + 'px';
+    s.fontSize = Math.round(24 * k) + 'px';
 
     var title = document.createElement('div');
     title.textContent = 'TV Browser - tasti';
-    title.style.fontSize = '34px';
-    title.style.marginBottom = '18px';
+    title.style.fontSize = Math.round(32 * k) + 'px';
+    title.style.marginBottom = Math.round(16 * k) + 'px';
     guide.appendChild(title);
 
     for (var i = 0; i < GUIDE.length; i++) {
       var row = document.createElement('div');
-      row.style.margin = '6px 0';
-      var k = document.createElement('span');
-      k.textContent = GUIDE[i][0];
-      k.style.display = 'inline-block';
-      k.style.width = '260px';
-      k.style.color = '#ffd600';
+      row.style.margin = Math.round(7 * k) + 'px 0';
+      var keysBox = document.createElement('span');
+      keysBox.style.display = 'inline-block';
+      keysBox.style.width = Math.round(300 * k) + 'px';
+      for (var c = 0; c < GUIDE[i][0].length; c++) {
+        keysBox.appendChild(makeChip(GUIDE[i][0][c], k));
+      }
       var d = document.createElement('span');
       d.textContent = GUIDE[i][1];
       d.style.color = '#d8dae3';
-      row.appendChild(k);
+      row.appendChild(keysBox);
       row.appendChild(d);
       guide.appendChild(row);
     }
     var foot = document.createElement('div');
-    foot.textContent = 'INFO o RETURN per chiudere  -  v' + VERSION;
-    foot.style.marginTop = '18px';
-    foot.style.fontSize = '20px';
-    foot.style.color = '#8a8d99';
+    foot.textContent = 'GUIDE o RETURN per chiudere  -  v' + VERSION;
+    foot.style.marginTop = Math.round(16 * k) + 'px';
+    foot.style.fontSize = Math.round(19 * k) + 'px';
+    foot.style.color = '#c3c5cd';
     guide.appendChild(foot);
     attach(guide);
+  }
+
+  // A key drawn like the remote button
+  function makeChip(label, k) {
+    var chip = document.createElement('span');
+    var s = chip.style;
+    s.display = 'inline-block';
+    s.minWidth = Math.round(34 * k) + 'px';
+    s.padding = Math.round(3 * k) + 'px ' + Math.round(9 * k) + 'px';
+    s.marginRight = Math.round(6 * k) + 'px';
+    s.borderRadius = Math.round(7 * k) + 'px';
+    s.textAlign = 'center';
+    s.fontSize = Math.round(20 * k) + 'px';
+    s.background = CHIP_COLORS[label] || '#3a3d46';
+    s.color = (label === 'OK' || label === 'C') ? '#000000' : '#ffffff';
+    chip.textContent = label;
+    return chip;
   }
 
   function closeGuide() {
@@ -918,11 +1016,15 @@
       timer: w.setTimeout(safe(bookmarkFallback), BOOKMARK_TIMEOUT_MS)
     };
     attach(frame);
-    showNotice('Aggiungo ai preferiti...', BOOKMARK_TIMEOUT_MS);
   }
 
   function finishBookmark(result) {
     if (!pendingAdd) {
+      return;
+    }
+    if (result === 'noservice') {
+      // The bookmark service did not answer: save through the home page instead
+      bookmarkFallback();
       return;
     }
     w.clearTimeout(pendingAdd.timer);
@@ -932,6 +1034,8 @@
       showNotice('Già nei preferiti', 2500);
     } else if (result === 'added') {
       showNotice('Aggiunto ai preferiti', 2500);
+    } else if (result === 'full') {
+      showNotice('Troppi preferiti: eliminane qualcuno dalla home', 3000);
     } else {
       showNotice('Impossibile salvare il preferito', 3000);
     }
@@ -942,10 +1046,60 @@
     if (!pendingAdd) {
       return;
     }
+    w.clearTimeout(pendingAdd.timer);
     detach(pendingAdd.frame);
     pendingAdd = null;
-    showNotice('Salvo tramite la home...', 3000);
-    w.location.href = bookmarkUrl('nav');
+    navigate(bookmarkUrl('nav'));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Loading bar (top of the screen)
+  // ---------------------------------------------------------------------------
+  var loadBar = null;
+  var loadTimer = null;
+  var loadWidth = 0;
+
+  function showLoadBar() {
+    if (!isTop) {
+      return;
+    }
+    if (!loadBar) {
+      loadBar = makeLayer('loadbar', 2147483647);
+      loadBar.style.left = '0';
+      loadBar.style.top = '0';
+      loadBar.style.height = Math.max(3, Math.round(5 * scaleFactor())) + 'px';
+      loadBar.style.background = ACCENT;
+    }
+    loadWidth = Math.max(loadWidth, 10);
+    loadBar.style.width = loadWidth + '%';
+    attach(loadBar);
+    if (!loadTimer) {
+      loadTimer = w.setInterval(safe(function () {
+        loadWidth = loadWidth + (90 - loadWidth) * 0.12;
+        loadBar.style.width = Math.round(loadWidth) + '%';
+      }), 250);
+      // Never stay on screen forever
+      w.setTimeout(safe(hideLoadBar), 30000);
+    }
+  }
+
+  function hideLoadBar() {
+    if (loadTimer) {
+      w.clearInterval(loadTimer);
+      loadTimer = null;
+    }
+    if (loadBar && loadBar.parentNode) {
+      loadBar.style.width = '100%';
+      w.setTimeout(safe(function () {
+        detach(loadBar);
+        loadWidth = 0;
+      }), 250);
+    }
+  }
+
+  function navigate(url) {
+    showLoadBar();
+    w.location.href = url;
   }
 
   // ---------------------------------------------------------------------------
@@ -977,7 +1131,10 @@
     lines.push('TVB v' + VERSION + ' on ' + (loc.hostname || '?') + '  |  runs: ' + (w.__TVB__ ? w.__TVB__.runs : '?'));
     lines.push('URL: ' + shorten(w.location.href, 90));
     lines.push('Mode: ' + (cursorMode ? 'cursor' : 'highlight') + '  |  current: ' + describeElement(current));
-    lines.push('Viewport: ' + viewport().w + 'x' + viewport().h + '  |  first page: ' + (isFirstPage() ? 'yes' : 'no'));
+    lines.push('Typing: ' + (isTyping() ? 'yes' : 'no') + '  |  active: ' + describeElement(document.activeElement));
+    lines.push('Viewport: ' + viewport().w + 'x' + viewport().h + '  |  first page: ' + (isFirstPage() ? 'yes' : 'no') +
+      '  |  white bg: ' + (whiteBackgroundApplied ? 'applied' : 'no'));
+    lines.push('Video: ' + describeVideo());
     lines.push('Iframes: ' + childFrames().length + ', with TVB: ' + (frames.length ? frames.join(', ') : 'none'));
     lines.push('Media found (' + mediaTotal + ', segments: ' + segmentCount + '):' + (media.length ? '' : ' none'));
     for (var i = 0; i < media.length; i++) {
@@ -1047,6 +1204,202 @@
     renderPending = true;
     w.setTimeout(safe(render), 50);
   }
+
+  // ---------------------------------------------------------------------------
+  // Pages that set no background (modern CSS the TV does not understand) would
+  // show TizenBrew's black window behind dark text: use white, like browsers do.
+  // ---------------------------------------------------------------------------
+  var whiteBackgroundApplied = false;
+
+  function isTransparent(color) {
+    return !color || color === 'transparent' || /rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(color);
+  }
+
+  function fixBackground() {
+    if (!isTop || whiteBackgroundApplied || !document.documentElement || !document.body) {
+      return;
+    }
+    var htmlBg = w.getComputedStyle(document.documentElement).backgroundColor;
+    var bodyBg = w.getComputedStyle(document.body).backgroundColor;
+    var htmlImg = w.getComputedStyle(document.documentElement).backgroundImage;
+    var bodyImg = w.getComputedStyle(document.body).backgroundImage;
+    if (isTransparent(htmlBg) && isTransparent(bodyBg) && htmlImg === 'none' && bodyImg === 'none') {
+      document.documentElement.style.backgroundColor = '#ffffff';
+      whiteBackgroundApplied = true;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Videos: "video detected" message, A = full screen, media keys
+  // ---------------------------------------------------------------------------
+  var videoEl = null;       // detected video in this document
+  var videoFrame = null;    // (main page) iframe that reported a playing video
+  var pseudoFull = null;    // { el, style } when full screen is simulated with CSS
+  var announced = false;    // message shown once per page
+
+  function pickVideo() {
+    var best = null;
+    var bestArea = 0;
+    var videos = document.getElementsByTagName('video');
+    for (var i = 0; i < videos.length; i++) {
+      var v = videos[i];
+      if (v.getAttribute('data-tvb')) {
+        continue;
+      }
+      var r = v.getBoundingClientRect();
+      var area = r.width * r.height + (v.paused ? 0 : 1e9); // playing videos first
+      if (area > bestArea) {
+        bestArea = area;
+        best = v;
+      }
+    }
+    return best;
+  }
+
+  function describeVideo() {
+    if (videoEl) {
+      return (videoEl.paused ? 'paused' : 'playing') + ' ' + Math.round(videoEl.currentTime || 0) + 's' +
+        (fullscreenElement() || pseudoFull ? ' (full screen)' : '');
+    }
+    return videoFrame ? 'in iframe' : 'none';
+  }
+
+  function onVideoPlaying(ev) {
+    var v = ev && ev.target;
+    if (!v || v.tagName !== 'VIDEO' || (v.getAttribute && v.getAttribute('data-tvb'))) {
+      return;
+    }
+    videoEl = v;
+    if (isTop) {
+      videoFrame = null;
+      announceVideo();
+    } else {
+      postToTop('video', { playing: true });
+    }
+    scheduleRender();
+  }
+
+  function announceVideo() {
+    if (announced || fullscreenElement() || pseudoFull) {
+      return;
+    }
+    announced = true;
+    showNotice('Video rilevato: premi A (rosso) per lo schermo intero', 4000);
+  }
+
+  function fullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
+  function requestFull(el) {
+    var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen;
+    if (!fn) {
+      return false;
+    }
+    try {
+      var result = fn.call(el);
+      if (result && typeof result.then === 'function') {
+        result.then(null, function () {
+          if (!fullscreenElement()) {
+            pseudoFullscreen(el);
+          }
+        });
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Full screen simulated with CSS (when the real one is refused)
+  function pseudoFullscreen(el) {
+    if (pseudoFull) {
+      return;
+    }
+    pseudoFull = { el: el, style: el.getAttribute('style') };
+    var s = el.style;
+    s.position = 'fixed';
+    s.left = '0';
+    s.top = '0';
+    s.width = '100%';
+    s.height = '100%';
+    s.maxWidth = 'none';
+    s.maxHeight = 'none';
+    s.zIndex = '2147483640';
+    s.background = '#000000';
+    s.margin = '0';
+  }
+
+  function exitFull() {
+    if (pseudoFull) {
+      if (pseudoFull.style === null) {
+        pseudoFull.el.removeAttribute('style');
+      } else {
+        pseudoFull.el.setAttribute('style', pseudoFull.style);
+      }
+      pseudoFull = null;
+      if (isTop) {
+        broadcastToFrames('videoExit', {});
+      }
+      return true;
+    }
+    if (fullscreenElement()) {
+      var exit = document.exitFullscreen || document.webkitExitFullscreen || document.webkitCancelFullScreen;
+      if (exit) {
+        try { exit.call(document); } catch (e) { /* ignore */ }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // Key A on the main page
+  function videoFullscreen() {
+    if (videoFrame && inDocument(videoFrame)) {
+      // Video inside an iframe: make the whole frame full screen, and ask the frame to fill it with the video
+      videoFrame.setAttribute('allowfullscreen', 'true');
+      if (!requestFull(videoFrame)) {
+        pseudoFullscreen(videoFrame);
+      }
+      postTo(videoFrame.contentWindow, 'videoFill', {});
+      return;
+    }
+    var v = (videoEl && inDocument(videoEl)) ? videoEl : pickVideo();
+    if (!v) {
+      showNotice('Nessun video rilevato in questa pagina', 2500);
+      return;
+    }
+    videoEl = v;
+    if (!requestFull(v)) {
+      pseudoFullscreen(v);
+    }
+  }
+
+  // Play / pause / seek, on our video or forwarded to the iframe that has it
+  function videoCommand(cmd) {
+    if (isTop && videoFrame && inDocument(videoFrame) && !(videoEl && inDocument(videoEl))) {
+      postTo(videoFrame.contentWindow, 'videoCmd', { cmd: cmd });
+      return true;
+    }
+    var v = (videoEl && inDocument(videoEl)) ? videoEl : null;
+    if (!v) {
+      return false;
+    }
+    try {
+      if (cmd === 'play') {
+        v.play();
+      } else if (cmd === 'pause') {
+        v.pause();
+      } else if (cmd === 'rewind') {
+        v.currentTime = Math.max(0, v.currentTime - SEEK_SECONDS);
+      } else if (cmd === 'forward') {
+        v.currentTime = Math.min(v.duration || v.currentTime + SEEK_SECONDS, v.currentTime + SEEK_SECONDS);
+      }
+    } catch (e) { /* ignore */ }
+    return true;
+  }
+
+  var MEDIA_COMMANDS = { 415: 'play', 19: 'pause', 412: 'rewind', 417: 'forward' };
 
   // ---------------------------------------------------------------------------
   // Media detection (debug now, "extract video" later)
@@ -1145,18 +1498,11 @@
   // ---------------------------------------------------------------------------
   // Keys
   // ---------------------------------------------------------------------------
-  function digitOf(code) {
-    if (code >= 48 && code <= 57) {
-      return code - 48;
-    }
-    return -1;
-  }
 
   // Keys always handled by the main page (forwarded from iframes)
   function isGlobalKey(code) {
-    var d = digitOf(code);
-    return code === KEY.BACK || code === KEY.GREEN || code === KEY.YELLOW ||
-      code === KEY.TOOLS || code === KEY.INFO || d === 0 || d === 8 || d === 9;
+    return code === KEY.BACK || code === KEY.GREEN || code === KEY.YELLOW || code === KEY.RED ||
+      code === KEY.TOOLS || code === KEY.INFO || code === KEY.GUIDE;
   }
 
   function isNavKey(code) {
@@ -1167,22 +1513,33 @@
   // { frame: <iframe element or null> } for keys forwarded by an iframe.
   // Returns true when the key was used.
   function handleKey(code, fromFrame) {
-    var digit = digitOf(code);
-
     if (guide) {
-      if (code === KEY.INFO || digit === 9 || code === KEY.BACK) {
+      if (code === KEY.GUIDE || code === KEY.BACK) {
         closeGuide();
         return true;
       }
       return isNavKey(code); // the page stays still while the guide is open
     }
 
+    if (code === KEY.BACK && exitFull()) {
+      return true;
+    }
+
     var active = document.activeElement;
-    var typing = !fromFrame && isEditable(active);
+    var typing = !fromFrame && isTyping();
+
+    // A text field focused by the page itself (autofocus) must not trap the keys
+    if (!fromFrame && !typing && isEditable(active) && (DIR_BY_KEY[code] || code === KEY.BACK)) {
+      try { active.blur(); } catch (e) { /* ignore */ }
+      if (code === KEY.BACK) {
+        updateRing();
+        return true;
+      }
+    }
 
     if (code === KEY.BACK) {
       if (typing) {
-        active.blur();
+        stopTyping();
         return true;
       }
       if (fromFrame || (active && active.tagName === 'IFRAME')) {
@@ -1195,15 +1552,48 @@
       if (isFirstPage()) {
         askExit();
       } else {
+        showLoadBar();
         w.history.back();
       }
       return true;
     }
 
+    // Our keys work even while typing (they are not characters)
+    if (code === KEY.TOOLS) {
+      if (typing) { stopTyping(); }
+      setCursorMode(!cursorMode);
+      return true;
+    }
+    if (code === KEY.GUIDE) {
+      openGuide();
+      return true;
+    }
+    if (code === KEY.INFO) {
+      debugVisible = !debugVisible;
+      render();
+      return true;
+    }
+    if (code === KEY.YELLOW) {
+      navigate(HOME_URL);
+      return true;
+    }
+    if (code === KEY.GREEN) {
+      addBookmark();
+      return true;
+    }
+    if (code === KEY.RED) {
+      videoFullscreen();
+      return true;
+    }
+    if (MEDIA_COMMANDS[code]) {
+      videoCommand(MEDIA_COMMANDS[code]);
+      return false; // let the site react to its media keys too
+    }
+
     if (typing) {
-      // Up/down leave the field; everything else (letters, digits, OK) belongs to the field
+      // Up/down leave the field; letters, digits, OK, left/right belong to the field
       if (code === KEY.UP || code === KEY.DOWN) {
-        active.blur();
+        stopTyping();
         if (!cursorMode) {
           moveFocus(DIR_BY_KEY[code]);
         }
@@ -1212,47 +1602,50 @@
       return false;
     }
 
-    if (code === KEY.TOOLS || digit === 8) {
-      setCursorMode(!cursorMode);
-    } else if (code === KEY.INFO || digit === 9) {
-      openGuide();
-    } else if (digit === 0) {
-      debugVisible = !debugVisible;
-      render();
-    } else if (code === KEY.YELLOW) {
-      w.location.href = HOME_URL;
-    } else if (code === KEY.GREEN) {
-      addBookmark();
-    } else if (DIR_BY_KEY[code]) {
+    if (DIR_BY_KEY[code]) {
       if (cursorMode) {
         moveCursor(code);
       } else {
         moveFocus(DIR_BY_KEY[code]);
       }
-    } else if (code === KEY.OK) {
+      return true;
+    }
+    if (code === KEY.OK) {
       if (cursorMode) {
         cursorClick();
-      } else {
-        return activate();
+        return true;
       }
-    } else {
-      return false;
+      return activate();
     }
-    return true;
+    return false;
   }
 
   // Iframe. Returns true when the key was used.
   var frameCursorMode = false;
   function handleFrameKey(code) {
+    if (MEDIA_COMMANDS[code]) {
+      videoCommand(MEDIA_COMMANDS[code]); // the video is here
+      return false;
+    }
+    if (code === KEY.BACK && exitFull()) {
+      return true;
+    }
     if (isGlobalKey(code) || (frameCursorMode && isNavKey(code))) {
+      if (isTyping() && code === KEY.BACK) {
+        stopTyping();
+        return true;
+      }
       postToTop('key', { code: code });
       return true;
     }
-    if (isEditable(document.activeElement)) {
+    if (isTyping()) {
       return false;
     }
     if (DIR_BY_KEY[code]) {
       var dir = DIR_BY_KEY[code];
+      if (isEditable(document.activeElement)) {
+        try { document.activeElement.blur(); } catch (e) { /* ignore */ }
+      }
       if (!moveFocus(dir)) {
         postToTop('navEdge', { dir: dir }); // nothing more here: continue in the main page
       }
@@ -1280,7 +1673,7 @@
     var a = closestTag(ev.target, 'A');
     if (a && a.target === '_blank' && /^https?:/.test(a.href || '')) {
       ev.preventDefault();
-      w.location.href = a.href;
+      navigate(a.href);
     }
   }
 
@@ -1325,6 +1718,11 @@
         if (!cursorMode) {
           moveFocus(String(data.dir));
         }
+      } else if (msg.type === 'video') {
+        if (frame && !(videoEl && inDocument(videoEl) && !videoEl.paused)) {
+          videoFrame = frame;
+          announceVideo();
+        }
       }
       scheduleRender();
       return;
@@ -1341,6 +1739,17 @@
       } else {
         updateRing();
       }
+    } else if (msg.type === 'videoFill') {
+      // The main page put this frame in full screen: fill it with the video
+      var v = (videoEl && inDocument(videoEl)) ? videoEl : pickVideo();
+      if (v) {
+        videoEl = v;
+        pseudoFullscreen(v);
+      }
+    } else if (msg.type === 'videoExit') {
+      exitFull();
+    } else if (msg.type === 'videoCmd') {
+      videoCommand(String(data.cmd));
     }
   }
 
@@ -1350,9 +1759,11 @@
   try {
     w.addEventListener('keydown', safe(onKeyDown), true);
     document.addEventListener('click', safe(onClick), true);
+    document.addEventListener('playing', safe(onVideoPlaying), true); // media events do not bubble: capture
     w.addEventListener('message', safe(onMessage));
     w.addEventListener('scroll', safe(scheduleRing), true);
     w.addEventListener('resize', safe(scheduleRing));
+    w.addEventListener('beforeunload', safe(showLoadBar));
     w.addEventListener('error', safe(function (ev) {
       if (!ev || !ev.message) {
         return; // resource load errors
@@ -1360,19 +1771,56 @@
       var file = ev.filename ? ' (' + shorten(String(ev.filename).split('/').pop(), 30) + ':' + (ev.lineno || '?') + ')' : '';
       addError(ev.message + file);
     }), true);
+    var leaveFull = safe(function () {
+      if (!fullscreenElement() && isTop && videoFrame) {
+        broadcastToFrames('videoExit', {});
+      }
+    });
+    document.addEventListener('fullscreenchange', leaveFull);
+    document.addEventListener('webkitfullscreenchange', leaveFull);
   } catch (e) { /* ignore */ }
 
   installHooks();
   reportFrame();
+
+  // The page may still be loading when we arrive
   try {
-    document.addEventListener('DOMContentLoaded', safe(reportFrame));
-    w.addEventListener('load', safe(reportFrame));
+    if (isTop && document.readyState !== 'complete') {
+      showLoadBar();
+    }
+    document.addEventListener('DOMContentLoaded', safe(function () {
+      reportFrame();
+      fixBackground();
+    }));
+    w.addEventListener('load', safe(function () {
+      reportFrame();
+      fixBackground();
+      hideLoadBar();
+    }));
   } catch (e) { /* ignore */ }
 
+  var ticks = 0;
   w.setInterval(safe(function () {
+    ticks += 1;
     scanPage();
     if (current && !inDocument(current)) {
       current = null;
+    }
+    if (ticks <= 5) {
+      fixBackground();
+    }
+    if (videoEl && !inDocument(videoEl)) {
+      videoEl = null;
+    }
+    // A video that was already playing before we arrived
+    if (!videoEl) {
+      var v = pickVideo();
+      if (v && !v.paused) {
+        onVideoPlaying({ target: v });
+      }
+    }
+    if (document.readyState === 'complete' && loadTimer && ticks > 2) {
+      hideLoadBar();
     }
     updateRing();
     if (cursorMode) {

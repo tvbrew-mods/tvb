@@ -4,71 +4,126 @@
 <meta charset="utf-8">
 <title>TV Browser</title>
 <style>
+  /* "Liquid glass" style, adapted to the TV: no backdrop blur (not supported by the old engine),
+     so the glass is made of a colorless translucent tint, a light rim and soft shadows over a
+     dark background with colored glows. */
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
-  body { background: #121317; color: #ffffff; font-family: sans-serif; }
+  body { color: #ffffff; font-family: sans-serif;
+         background:
+           radial-gradient(circle at 85% 15%, rgba(120, 80, 255, 0.28) 0%, rgba(10, 10, 12, 0) 45%),
+           radial-gradient(circle at 70% 95%, rgba(0, 190, 220, 0.20) 0%, rgba(10, 10, 12, 0) 45%),
+           radial-gradient(circle at 30% 80%, rgba(255, 80, 160, 0.14) 0%, rgba(10, 10, 12, 0) 40%),
+           #0a0a0c; }
   #glow { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
   #app { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
-  #greet { position: absolute; left: 90px; top: 56px; font-size: 24px; color: #9a9ca3; }
+  .glass { background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(179, 179, 179, 0.05));
+           border: 1px solid rgba(255, 255, 255, 0.10);
+           box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.45),
+                       inset 0 -1px 0 rgba(255, 255, 255, 0.05); }
+  #greet { position: absolute; left: 90px; top: 56px; font-size: 24px; color: #a4a6ae; }
   #clock { position: absolute; left: 90px; top: 90px; font-size: 64px; }
-  #date { font-size: 26px; color: #9a9ca3; margin-left: 18px; }
+  #date { font-size: 26px; color: #a4a6ae; margin-left: 18px; }
   #actions { position: absolute; right: 90px; top: 70px; }
-  .pill { display: inline-block; vertical-align: middle; margin-left: 18px; padding: 16px 30px; border-radius: 40px;
-          background: #26282e; color: #c9cbd1; font-size: 26px; border: 3px solid #26282e; }
-  .pill.focus { border-color: #ffffff; background: #34373f; color: #ffffff; }
+  .pill { display: inline-block; vertical-align: middle; margin-left: 18px; padding: 16px 32px; border-radius: 9999px;
+          color: #d6d8de; font-size: 26px;
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(179, 179, 179, 0.05));
+          border: 2px solid rgba(255, 255, 255, 0.10);
+          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+          -webkit-transition: -webkit-transform 0.18s; transition: transform 0.18s; }
+  .pill.focus { color: #ffffff; border-color: rgba(255, 255, 255, 0.9);
+                background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(179, 179, 179, 0.10));
+                -webkit-transform: translateY(-2px); transform: translateY(-2px); }
   #search { min-width: 520px; }
-  .lens { display: inline-block; width: 18px; height: 18px; border: 3px solid #c9cbd1; border-radius: 50%;
+  .lens { display: inline-block; width: 18px; height: 18px; border: 3px solid #d6d8de; border-radius: 50%;
           margin-right: 16px; vertical-align: -3px; }
   /* Showcase: the selected bookmark in large */
   #hero { position: absolute; left: 90px; right: 90px; top: 280px; height: 300px; }
-  #heroIcon { position: absolute; left: 0; top: 0; width: 280px; height: 280px; border-radius: 36px; overflow: hidden;
-              background: #26282e; }
+  #heroIcon { position: absolute; left: 0; top: 0; width: 280px; height: 280px; border-radius: 40px; overflow: hidden;
+              border: 1px solid rgba(255, 255, 255, 0.14);
+              box-shadow: 0 18px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.5),
+                          inset 0 -1px 0 rgba(255, 255, 255, 0.06); }
   #heroIcon img { position: absolute; left: 50%; top: 50%; width: 128px; height: 128px; margin: -64px 0 0 -64px; display: none; }
   #heroLetter { position: absolute; left: 0; right: 0; top: 50%; margin-top: -70px; text-align: center; font-size: 120px; line-height: 140px; }
   #heroText { position: absolute; left: 340px; right: 0; top: 30px; }
   #title { font-size: 72px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #subtitle { font-size: 30px; color: #9a9ca3; margin-top: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #hint { font-size: 26px; color: #c9cbd1; margin-top: 34px; }
+  #subtitle { font-size: 30px; color: #a4a6ae; margin-top: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #hint { display: inline-block; font-size: 24px; color: #e2e4ea; margin-top: 30px; padding: 10px 22px; border-radius: 9999px;
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(179, 179, 179, 0.04));
+          border: 1px solid rgba(255, 255, 255, 0.10); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35); }
   /* Row of small tiles */
-  #row { position: absolute; left: 0; right: 0; bottom: 120px; height: 190px; overflow: hidden; }
-  #grid { position: absolute; left: 90px; top: 20px; white-space: nowrap;
-          -webkit-transition: -webkit-transform 0.15s; transition: transform 0.15s; }
-  .tile { position: relative; display: inline-block; vertical-align: top; width: 230px; height: 130px; margin-right: 28px;
-          border-radius: 16px; border: 4px solid transparent; overflow: hidden; box-sizing: border-box; white-space: normal;
-          -webkit-transition: -webkit-transform 0.12s; transition: transform 0.12s; }
-  .tile.focus { border-color: #ffffff; -webkit-transform: scale(1.1); transform: scale(1.1); }
+  #row { position: absolute; left: 0; right: 0; bottom: 120px; height: 200px; overflow: hidden; }
+  #grid { position: absolute; left: 90px; top: 24px; white-space: nowrap;
+          -webkit-transition: -webkit-transform 0.18s; transition: transform 0.18s; }
+  .tile { position: relative; display: inline-block; vertical-align: top; width: 230px; height: 130px; margin-right: 30px;
+          border-radius: 22px; border: 2px solid rgba(255, 255, 255, 0.12); overflow: hidden; box-sizing: border-box;
+          white-space: normal;
+          box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.45),
+                      inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+          -webkit-transition: -webkit-transform 0.18s; transition: transform 0.18s; }
+  .tile.focus { border-color: rgba(255, 255, 255, 0.95); -webkit-transform: scale(1.1); transform: scale(1.1);
+                box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45), 0 0 0 4px rgba(255, 255, 255, 0.12),
+                            inset 0 1px 0 rgba(255, 255, 255, 0.6); }
   .tile.moving { border-color: #378ADD; -webkit-transform: scale(1.1); transform: scale(1.1); }
+  .tile .shine { position: absolute; left: 0; right: 0; top: 0; height: 50%;
+                 background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0)); }
   .tile .letter { position: absolute; left: 0; right: 0; top: 12px; text-align: center; font-size: 54px; color: #ffffff; }
   .tile .name { position: absolute; left: 12px; right: 12px; bottom: 10px; text-align: center; font-size: 22px;
                 color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tile img { position: absolute; left: 50%; top: 16px; width: 56px; height: 56px; margin-left: -28px; display: none; }
-  #empty { display: none; position: absolute; left: 90px; top: 20px; width: 760px; height: 130px; padding: 24px 30px;
-           box-sizing: border-box; border: 3px dashed #4a4d55; border-radius: 16px; color: #9a9ca3; font-size: 26px; }
+  #empty { display: none; position: absolute; left: 90px; top: 24px; width: 780px; height: 130px; padding: 24px 30px;
+           box-sizing: border-box; border-radius: 22px; color: #c4c6cd; font-size: 26px;
+           background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(179, 179, 179, 0.03));
+           border: 2px dashed rgba(255, 255, 255, 0.22); }
   /* Legend drawn like the remote buttons */
-  #legend { position: absolute; left: 90px; right: 90px; bottom: 40px; font-size: 22px; color: #9a9ca3; }
+  #legend { position: absolute; left: 90px; right: 90px; bottom: 40px; font-size: 22px; color: #a4a6ae; }
   #legend .item { margin-right: 34px; }
-  .chip { display: inline-block; min-width: 30px; padding: 3px 10px; margin-right: 8px; border-radius: 6px; text-align: center;
-          font-size: 20px; background: #2e3038; color: #ffffff; }
+  .chip { display: inline-block; min-width: 30px; padding: 3px 10px; margin-right: 8px; border-radius: 7px; text-align: center;
+          font-size: 20px; background: rgba(255, 255, 255, 0.14); color: #ffffff;
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3); }
   .chip.ok { background: #ffffff; color: #000000; }
   .chip.blue { background: #378ADD; color: #ffffff; }
   .chip.green { background: #3B9B3B; color: #ffffff; }
   #status { position: absolute; right: 0; top: 0; color: #f09595; display: none; }
-  #modal { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); display: none; }
+  /* Dialogs: frosted glass (translucent; a soft text shadow keeps it readable) */
+  #modal { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.35); display: none; }
+  #dialog, #notice { text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
   #dialog { position: absolute; left: 50%; top: 50%; width: 1100px; margin-left: -550px; -webkit-transform: translateY(-50%);
-            transform: translateY(-50%); background: #1b1e27; border: 2px solid #3d4150; border-radius: 18px;
-            padding: 34px 40px; box-sizing: border-box; font-size: 28px; }
+            transform: translateY(-50%); border-radius: 28px; padding: 34px 40px; box-sizing: border-box; font-size: 28px;
+            background: linear-gradient(180deg, rgba(48, 50, 60, 0.72), rgba(28, 30, 38, 0.72));
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.4); }
   #dialog .dtitle { font-size: 36px; margin-bottom: 22px; }
-  #dialog .item { padding: 14px 22px; margin: 8px 0; border-radius: 12px; border: 3px solid transparent; background: #262a34; }
-  #dialog .item.focus { border-color: #ffffff; background: #343946; }
+  #dialog .item { padding: 14px 24px; margin: 8px 0; border-radius: 9999px; border: 2px solid rgba(255, 255, 255, 0.08);
+                  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(179, 179, 179, 0.04));
+                  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3); }
+  #dialog .item.focus { border-color: rgba(255, 255, 255, 0.9);
+                        background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(179, 179, 179, 0.10)); }
   #dialog .row .item { display: inline-block; margin-right: 18px; min-width: 200px; text-align: center; }
-  #dialog input { width: 100%; box-sizing: border-box; font-size: 34px; padding: 14px 18px; border-radius: 10px;
-                  border: 3px solid #ffffff; background: #ffffff; color: #000000; }
-  #dialog .hint { font-size: 22px; color: #8a8d99; margin-top: 16px; }
-  #dialog .grow { margin: 6px 0; }
-  #dialog .gk { display: inline-block; width: 280px; color: #ffffff; }
-  #dialog .gd { color: #d8dae3; }
-  #notice { position: absolute; left: 50%; bottom: 7%; width: 1000px; margin-left: -500px; padding: 18px 24px;
-            box-sizing: border-box; text-align: center; font-size: 28px; color: #ffffff; background: rgba(20, 22, 28, 0.95);
-            border: 2px solid #4a4d55; border-radius: 12px; display: none; }
+  #dialog input { width: 100%; box-sizing: border-box; font-size: 34px; padding: 14px 22px; border-radius: 9999px;
+                  border: 2px solid rgba(255, 255, 255, 0.35); color: #ffffff;
+                  background: linear-gradient(180deg, rgba(0, 0, 0, 0.30), rgba(0, 0, 0, 0.18));
+                  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.12); outline: none; }
+  #dialog input:focus { border-color: #2f9bff; box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(47, 155, 255, 0.25); }
+  #dialog .hint { font-size: 22px; color: #9a9ca5; margin-top: 16px; }
+  #dialog .gd { color: #dfe1e7; }
+  #dialog .gsec { font-size: 26px; color: #a4a6ae; margin: 18px 0 6px; }
+  #dialog .grow { margin: 8px 0; }
+  #dialog .gkeys { display: inline-block; width: 330px; }
+  .gchip { display: inline-block; min-width: 34px; padding: 4px 10px; margin-right: 6px; border-radius: 8px;
+           text-align: center; font-size: 22px; background: rgba(255, 255, 255, 0.16); color: #ffffff;
+           box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3); }
+  .gchip.ok { background: #ffffff; color: #000000; }
+  .gchip.a { background: #d6453f; } .gchip.b { background: #3B9B3B; }
+  .gchip.c { background: #e0b400; color: #000000; } .gchip.d { background: #378ADD; }
+  /* Notices: small glass pill */
+  #notice { position: absolute; left: 50%; bottom: 100px; -webkit-transform: translateX(-50%); transform: translateX(-50%);
+            padding: 12px 26px; white-space: nowrap; font-size: 22px; color: #ffffff; border-radius: 9999px; display: none;
+            background: linear-gradient(180deg, rgba(60, 62, 72, 0.58), rgba(30, 32, 40, 0.58));
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+  #loadbar { position: absolute; left: 0; top: 0; height: 5px; width: 0; background: #2f9bff; display: none;
+             box-shadow: 0 0 12px rgba(47, 155, 255, 0.8);
+             -webkit-transition: width 0.3s; transition: width 0.3s; }
   #debug { position: absolute; right: 20px; bottom: 20px; font-family: monospace; font-size: 16px; color: #ffffff;
            background: rgba(150, 0, 0, 0.9); padding: 8px 10px; border-radius: 6px; white-space: pre; display: none; }
 </style>
@@ -88,24 +143,26 @@
   </div>
   <div id="row"><div id="grid"></div><div id="empty">Nessun preferito: apri un sito e premi <span class="chip green">B</span>per aggiungerlo qui.</div></div>
   <div id="legend">
-    <span class="item"><span class="chip ok">OK</span>apri</span><span class="item"><span class="chip blue">D</span>modifica</span><span class="item"><span class="chip">INFO</span>guida</span><span class="item"><span class="chip">EXIT</span>esci</span>
+    <span class="item"><span class="chip ok">OK</span>apri</span><span class="item"><span class="chip blue">D</span>modifica</span><span class="item"><span class="chip">GUIDE</span>guida</span><span class="item"><span class="chip">EXIT</span>esci</span>
     <span id="status">&#9679; Funzioni sui siti non attive: premi EXIT e riapri</span>
   </div>
 </div>
 <div id="modal"><div id="dialog"></div></div>
 <div id="notice"></div>
+<div id="loadbar"></div>
 <div id="debug"></div>
 <script>
 /*
  * TVB home page. Served by TizenBrew's local module proxy, so it works even
- * when script injection is not active, and it has a fixed origin where the
- * bookmarks are stored (localStorage).
+ * when script injection is not active. Bookmarks are stored by the TVB service
+ * (service.js, a file on the TV); localStorage keeps a backup copy.
  * Plain ES5 for the old Chromium engine of Tizen TVs.
  */
 (function () {
   'use strict';
 
-  var VERSION = '0.1.0';
+  var VERSION = '0.1.1';
+  var SERVICE_URL = 'http://127.0.0.1:8095';
   var STORAGE_KEY = 'tvb.bookmarks';
   var MAX_BOOKMARKS = 120;
   var SEARCH_URL = 'https://www.google.com/search?q=';
@@ -114,20 +171,25 @@
   var MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto',
     'settembre', 'ottobre', 'novembre', 'dicembre'];
   var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, OK: 13, BACK: 10009, BLUE: 406, YELLOW: 405,
-    INFO: 457, SELECT: 65376 };
+    INFO: 457, GUIDE: 458, SELECT: 65376 };
+  // Each row: [keys drawn like the remote buttons, description]. A row with only a title starts a section.
   var GUIDE = [
-    ['Nella home', ''],
-    ['Frecce + OK', 'apri un preferito o la barra di ricerca'],
-    ['D (blu)', 'modifica il preferito: rinomina, sposta, elimina'],
-    ['Sui siti', ''],
-    ['Frecce', 'evidenziano link e pulsanti'],
-    ['OK', 'apre o preme l\'elemento evidenziato'],
-    ['TOOLS (o 8)', 'attiva / disattiva il cursore'],
-    ['C (giallo)', 'torna alla home'],
-    ['B (verde)', 'aggiunge la pagina ai preferiti'],
-    ['RETURN', 'indietro'],
-    ['INFO (o 9)', 'guida dei tasti'],
-    ['EXIT', 'esce dall\'app']
+    ['Nella home'],
+    [['◀', '▲', '▼', '▶', 'OK'], 'scegli e apri un preferito o la ricerca'],
+    [['D'], 'modifica il preferito: rinomina, sposta, elimina'],
+    ['Sui siti'],
+    [['◀', '▲', '▼', '▶'], 'evidenziano link, pulsanti e campi'],
+    [['OK'], 'apre o preme l\'elemento evidenziato'],
+    [['TOOLS'], 'attiva / disattiva il cursore'],
+    [['B'], 'aggiunge la pagina ai preferiti'],
+    [['C'], 'torna alla home'],
+    [['A'], 'video a schermo intero'],
+    [['▶', 'II'], 'play / pausa del video'],
+    [['◀◀', '▶▶'], 'indietro / avanti di 10 secondi nel video'],
+    [['RETURN'], 'indietro'],
+    [['GUIDE'], 'questa guida'],
+    [['INFO'], 'informazioni tecniche (debug)'],
+    [['EXIT'], 'esce dall\'app']
   ];
 
   var w = window;
@@ -149,14 +211,123 @@
     }
   }
 
-  function saveBookmarks() {
+  function saveLocal(list) {
     try {
-      w.localStorage.setItem(STORAGE_KEY, JSON.stringify(bookmarks));
+      w.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
       return true;
     } catch (e) {
-      showNotice('Impossibile salvare i preferiti', 3000);
       return false;
     }
+  }
+
+  // Save the whole list: in the service (main copy) and in localStorage (backup)
+  function saveBookmarks() {
+    var local = saveLocal(bookmarks);
+    if (serviceOk) {
+      api('PUT', '/bookmarks', { bookmarks: bookmarks }, function (err) {
+        if (err) {
+          showNotice('Impossibile salvare i preferiti sulla TV', 3000);
+        }
+      });
+    } else if (!local) {
+      showNotice('Impossibile salvare i preferiti', 3000);
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------- TVB service (service.js)
+  var serviceOk = false;
+
+  function api(method, path, body, callback, timeoutMs) {
+    var done = false;
+    function finish(err, data) {
+      if (!done) {
+        done = true;
+        callback(err, data);
+      }
+    }
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, SERVICE_URL + path, true);
+      xhr.timeout = timeoutMs || 3000;
+      xhr.onload = function () {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          finish(data && data.ok ? null : new Error('error'), data);
+        } catch (e) {
+          finish(e);
+        }
+      };
+      xhr.onerror = function () { finish(new Error('network')); };
+      xhr.ontimeout = function () { finish(new Error('timeout')); };
+      if (body) {
+        xhr.setRequestHeader('Content-Type', 'text/plain'); // simple request, no CORS preflight for POST
+        xhr.send(JSON.stringify(body));
+      } else {
+        xhr.send();
+      }
+    } catch (e) {
+      finish(e);
+    }
+  }
+
+  // The service starts together with the module and may need a moment: retry a few times
+  function withRetry(fn, attempts, delay, callback) {
+    fn(function (err, data) {
+      if (err && attempts > 1) {
+        w.setTimeout(function () { withRetry(fn, attempts - 1, delay, callback); }, delay);
+      } else {
+        callback(err, data);
+      }
+    });
+  }
+
+  function serviceAdd(url, title, callback) {
+    withRetry(function (cb) {
+      api('POST', '/bookmarks', { url: url, title: title }, cb);
+    }, 4, 800, function (err, data) {
+      callback(err ? null : data.result);
+    });
+  }
+
+  function syncWithService() {
+    withRetry(function (cb) { api('GET', '/bookmarks', null, cb, 2000); }, 6, 1000, function (err, data) {
+      if (err || !data || !data.bookmarks) {
+        serviceOk = false;
+        updateDebug();
+        return;
+      }
+      serviceOk = true;
+      var merged = data.bookmarks.slice(0);
+      var known = {};
+      var i;
+      for (i = 0; i < merged.length; i++) {
+        known[merged[i].url] = true;
+      }
+      // Bookmarks saved only locally (older version or service unavailable) are added to the service
+      var added = false;
+      for (i = 0; i < bookmarks.length; i++) {
+        if (!known[bookmarks[i].url]) {
+          merged.push(bookmarks[i]);
+          added = true;
+        }
+      }
+      bookmarks = merged;
+      saveLocal(bookmarks);
+      if (added) {
+        api('PUT', '/bookmarks', { bookmarks: bookmarks }, function () {});
+      }
+      renderGrid();
+      if (focus.zone === 'grid' && focus.grid >= bookmarks.length) {
+        focus.grid = Math.max(0, bookmarks.length - 1);
+      }
+      if (focus.zone === 'top' && bookmarks.length && !userMoved) {
+        focus.zone = 'grid';
+        focus.grid = 0;
+      }
+      applyFocus();
+      updateDebug();
+    });
   }
 
   function normalizeUrl(url) {
@@ -168,7 +339,12 @@
     return m ? m[1].replace(/^www\./, '') : url;
   }
 
-  function addBookmark(url, title) {
+  function cleanTitle(title, url) {
+    return String(title || '').replace(/\s+/g, ' ').substring(0, 80) || hostOf(url);
+  }
+
+  // Local backup only (used when the service is not available)
+  function addBookmarkLocal(url, title) {
     url = normalizeUrl(url);
     if (!/^https?:\/\//.test(url)) {
       return 'invalid';
@@ -181,9 +357,15 @@
     if (bookmarks.length >= MAX_BOOKMARKS) {
       return 'full';
     }
-    title = String(title || '').replace(/\s+/g, ' ').substring(0, 80) || hostOf(url);
-    bookmarks.push({ url: url, title: title });
-    return saveBookmarks() ? 'added' : 'error';
+    bookmarks.push({ url: url, title: cleanTitle(title, url) });
+    return saveLocal(bookmarks) ? 'added' : 'error';
+  }
+
+  function resultText(result) {
+    if (result === 'added') { return 'Aggiunto ai preferiti'; }
+    if (result === 'exists') { return 'Già nei preferiti'; }
+    if (result === 'full') { return 'Troppi preferiti: eliminane qualcuno'; }
+    return 'Impossibile salvare il preferito';
   }
 
   // ---------------------------------------------------------------- query string
@@ -206,21 +388,29 @@
   var bookmarks = loadBookmarks();
   var query = readQuery();
 
-  // Opened by a website to save a bookmark
+  // Opened by a website (hidden frame) to save a bookmark through the service.
+  // The frame's own storage is not reliable on the TV, so only the service is used here.
+  if (query.add && query.mode === 'frame') {
+    serviceAdd(normalizeUrl(query.add), cleanTitle(query.title, query.add), function (result) {
+      try { w.parent.postMessage({ __tvbHome: 1, result: result || 'noservice' }, '*'); } catch (e) { /* ignore */ }
+    });
+    return; // hidden frame: no interface
+  }
+
+  // Opened in the main window to save a bookmark (fallback), then back to the page
   if (query.add) {
-    var result = addBookmark(query.add, query.title);
-    if (query.mode === 'frame') {
-      try { w.parent.postMessage({ __tvbHome: 1, result: result }, '*'); } catch (e) { /* ignore */ }
-      return; // hidden frame: no interface
-    }
     try { w.history.replaceState(null, '', w.location.pathname); } catch (e) { /* ignore */ }
-    w.setTimeout(function () {
-      showNotice(result === 'exists' ? 'Già nei preferiti' : (result === 'added' ? 'Aggiunto ai preferiti' :
-        'Impossibile salvare il preferito'), 1500);
-    }, 0);
-    if (query.mode === 'nav') {
-      w.setTimeout(function () { w.history.back(); }, 1500);
-    }
+    var addUrl = normalizeUrl(query.add);
+    var addTitle = cleanTitle(query.title, query.add);
+    serviceAdd(addUrl, addTitle, function (result) {
+      if (!result) {
+        result = addBookmarkLocal(addUrl, addTitle);
+      }
+      showNotice(resultText(result), 1500);
+      if (query.mode === 'nav') {
+        w.setTimeout(function () { w.history.back(); }, 1500);
+      }
+    });
   }
 
   // ---------------------------------------------------------------- notice
@@ -255,6 +445,11 @@
     return COLORS[sum % COLORS.length];
   }
 
+  // Colored glass: the site color as a translucent tint with a light top
+  function glassTint(hex) {
+    return 'linear-gradient(180deg, ' + hexToRgba(hex, 0.62) + ', ' + hexToRgba(hex, 0.34) + ')';
+  }
+
   function hexToRgba(hex, alpha) {
     var n = parseInt(hex.substring(1), 16);
     return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
@@ -263,7 +458,10 @@
   function makeTile(b, index) {
     var tile = document.createElement('div');
     tile.className = 'tile';
-    tile.style.background = colorFor(b.url);
+    tile.style.background = glassTint(colorFor(b.url));
+    var shine = document.createElement('div');
+    shine.className = 'shine';
+    tile.appendChild(shine);
     var letter = document.createElement('div');
     letter.className = 'letter';
     letter.textContent = (b.title || hostOf(b.url)).charAt(0).toUpperCase();
@@ -304,7 +502,7 @@
     var letter = $('heroLetter');
     if (!b) {
       heroUrl = null;
-      $('heroIcon').style.background = '#26282e';
+      $('heroIcon').style.background = 'linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(179, 179, 179, 0.05))';
       img.style.display = 'none';
       letter.style.display = 'block';
       letter.textContent = '?';
@@ -314,7 +512,7 @@
       return;
     }
     heroUrl = b.url;
-    $('heroIcon').style.background = colorFor(b.url);
+    $('heroIcon').style.background = glassTint(colorFor(b.url));
     letter.textContent = (b.title || hostOf(b.url)).charAt(0).toUpperCase();
     letter.style.display = 'block';
     img.style.display = 'none';
@@ -435,25 +633,31 @@
       box.appendChild(hint);
     } else if (d.type === 'guide') {
       for (var g = 0; g < d.rows.length; g++) {
+        var spec = d.rows[g];
+        if (spec.length === 1) {
+          var sec = document.createElement('div');
+          sec.className = 'gsec';
+          sec.textContent = spec[0];
+          box.appendChild(sec);
+          continue;
+        }
         var row = document.createElement('div');
         row.className = 'grow';
-        var k = document.createElement('span');
-        k.className = d.rows[g][1] ? 'gk' : '';
-        k.textContent = d.rows[g][0];
-        if (!d.rows[g][1]) {
-          k.style.color = '#ffffff';
-          k.style.fontSize = '30px';
+        var keysBox = document.createElement('span');
+        keysBox.className = 'gkeys';
+        for (var c = 0; c < spec[0].length; c++) {
+          keysBox.appendChild(makeChip(spec[0][c]));
         }
         var desc = document.createElement('span');
         desc.className = 'gd';
-        desc.textContent = d.rows[g][1];
-        row.appendChild(k);
+        desc.textContent = spec[1];
+        row.appendChild(keysBox);
         row.appendChild(desc);
         box.appendChild(row);
       }
       var foot = document.createElement('div');
       foot.className = 'hint';
-      foot.textContent = 'INFO o RETURN per chiudere  -  v' + VERSION;
+      foot.textContent = 'GUIDE o RETURN per chiudere  -  v' + VERSION;
       box.appendChild(foot);
     } else {
       var container = box;
@@ -504,7 +708,7 @@
       return true;
     }
     if (d.type === 'guide') {
-      if (code === KEY.INFO || code === 57) {
+      if (code === KEY.GUIDE) {
         closeDialog();
       }
       return true;
@@ -534,6 +738,33 @@
     openDialog({ type: 'guide', title: 'TV Browser - tasti', rows: GUIDE });
   }
 
+  // A key drawn like the remote button
+  function makeChip(label) {
+    var chip = document.createElement('span');
+    var cls = 'gchip';
+    if (label === 'OK') { cls += ' ok'; }
+    if (label === 'A') { cls += ' a'; }
+    if (label === 'B') { cls += ' b'; }
+    if (label === 'C') { cls += ' c'; }
+    if (label === 'D') { cls += ' d'; }
+    chip.className = cls;
+    chip.textContent = label;
+    return chip;
+  }
+
+  // Thin progress bar at the top while the next page loads
+  function go(url) {
+    var bar = $('loadbar');
+    bar.style.display = 'block';
+    bar.style.width = '15%';
+    var width = 15;
+    w.setInterval(function () {
+      width = width + (90 - width) * 0.15;
+      bar.style.width = Math.round(width) + '%';
+    }, 300);
+    w.location.href = url;
+  }
+
   function openSearch() {
     openDialog({
       type: 'input',
@@ -542,7 +773,7 @@
       onOk: function (text) {
         var url = toUrl(text);
         if (url) {
-          w.location.href = url;
+          go(url);
         }
       }
     });
@@ -641,7 +872,7 @@
     });
   }
 
-  // ---------------------------------------------------------------- debug (key 0)
+  // ---------------------------------------------------------------- debug (INFO key)
   var debugOn = false;
   function updateDebug() {
     var box = $('debug');
@@ -651,6 +882,7 @@
     }
     var injected = !!(w.__TVB__ && w.__TVB__.injected);
     box.textContent = 'TVB home v' + VERSION + '\ninjection: ' + (injected ? 'yes (v' + w.__TVB__.version + ')' : 'NO') +
+      '\nservice: ' + (serviceOk ? 'yes' : 'NO (local copy only)') +
       '\nbookmarks: ' + bookmarks.length + '\nviewport: ' + w.innerWidth + 'x' + w.innerHeight;
     box.style.display = 'block';
   }
@@ -664,6 +896,7 @@
 
   // ---------------------------------------------------------------- keys
   var DIRS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
+  var userMoved = false;
 
   function onKeyDown(ev) {
     var code = ev.keyCode || ev.which || 0;
@@ -676,18 +909,19 @@
       else if (code === KEY.BACK) { stopMoving(false); }
       else { used = false; }
     } else if (DIRS[code]) {
+      userMoved = true;
       moveFocus(DIRS[code]);
     } else if (code === KEY.OK) {
       if (focus.zone === 'top') {
         if (focus.top === 0) { openSearch(); } else { openGuide(); }
       } else if (bookmarks[focus.grid]) {
-        w.location.href = bookmarks[focus.grid].url;
+        go(bookmarks[focus.grid].url);
       }
     } else if (code === KEY.BLUE) {
       if (focus.zone === 'grid') { openEditMenu(); }
-    } else if (code === KEY.INFO || code === 57) {
+    } else if (code === KEY.GUIDE) {
       openGuide();
-    } else if (code === 48) {
+    } else if (code === KEY.INFO) {
       debugOn = !debugOn;
       updateDebug();
     } else if (code === KEY.BACK) {
@@ -710,6 +944,7 @@
     focus.zone = 'grid';
   }
   applyFocus();
+  syncWithService();
   w.setTimeout(checkInjection, 4000);
   w.setTimeout(checkInjection, 9000);
 })();

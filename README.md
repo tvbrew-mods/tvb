@@ -3,15 +3,17 @@
 A [TizenBrew](https://github.com/reisxd/TizenBrew) module that makes browsing the web on Samsung (Tizen) smart TVs
 comfortable with the remote control.
 
-> **Status: early version (v0.1.0).** Home page with bookmarks, remote-friendly navigation and a virtual cursor.
-> Popup blocking and video features are planned.
+> **Status: early version (v0.1.1).** Home page with bookmarks, remote-friendly navigation, a virtual cursor
+> and basic video controls. Popup blocking and more video features are planned.
 
 ## Features
 
-- **Home page** with clock, web search (Google) or address bar, and your bookmarks
-- **Highlight navigation:** the arrow keys move between links, buttons and fields; OK opens them
+- **Home page** with clock, web search (Google) or address bar, and your bookmarks, in a "glass" style
+- **Highlight navigation:** the arrow keys move between links, buttons, fields and videos; OK opens them
 - **Virtual cursor** for the parts of a page that highlight navigation can't reach
-- **Bookmarks:** add any page with one key; rename, reorder and delete them from the home page
+- **Bookmarks:** add any page with one key, without leaving it; rename, reorder and delete them from the home page
+- **Video:** full screen with one key, play / pause and 10-second jumps with the media keys
+- **Loading bar** while a page loads, and a white background for pages that don't set one
 - **Key guide** always one key away
 - Keys pressed while an embedded frame (for example a video player or a cookie banner) has the focus still work
 
@@ -19,14 +21,18 @@ comfortable with the remote control.
 
 | Key | On websites | On the home page |
 |---|---|---|
-| Arrows | highlight links, buttons and fields (the page scrolls when there is nothing else) | move between bookmarks, search and guide |
-| OK | open / press the highlighted element | open the selected item |
-| TOOLS (or 8) | turn the virtual cursor on / off | |
+| Arrows | highlight links, buttons, fields and videos (the page scrolls when there is nothing else) | move between bookmarks, search and guide |
+| OK | open / press the highlighted element (play / pause on a video) | open the selected item |
+| TOOLS | turn the virtual cursor on / off | |
+| A (red) | video full screen (RETURN to leave) | |
 | B (green) | add the page to the bookmarks | |
 | C (yellow) | back to the home page | |
 | D (blue) | | edit the bookmark: rename, move, delete |
-| RETURN | back (or close the guide / leave a frame) | |
-| INFO (or 9) | key guide | key guide |
+| ▶ / ⏸ | play / pause the video | |
+| ◀◀ / ▶▶ | jump back / forward 10 seconds in the video | |
+| RETURN | back (or close the guide, leave full screen or a frame) | close dialogs |
+| GUIDE | key guide | key guide |
+| INFO | technical information (debug) | technical information (debug) |
 | EXIT | exit the app | exit the app |
 
 ## Planned
@@ -50,23 +56,25 @@ New to TizenBrew? Follow the step-by-step [TV setup guide](docs/TV-SETUP.md).
 2. Go to the **module manager** and choose **add GitHub module**.
 3. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.1.0
+   tvbrew-mods/tvb@v0.1.1
    ```
 4. Go back to the TizenBrew home screen and launch **TV Browser**.
 
 Specifying the version prevents an old cached copy from being loaded.
 
-If the module does not start, your TV may not support the TOOLS and INFO keys: remove it and add
-`tvbrew-mods/tvb@v0.1.0-safe` instead (same features, use 8 and 9 instead of TOOLS and INFO).
+If the module does not start, your TV may not support the GUIDE key: remove it and add
+`tvbrew-mods/tvb@v0.1.1-safe` instead (same features; open the key guide from the **Guide** button on the home page).
 
 ## Bookmarks and privacy
 
-Bookmarks are stored only on your TV, in the storage of the TVB home page. Nothing is collected or sent anywhere.
+Bookmarks are stored only on your TV: in a small file managed by TVB inside TizenBrew's storage
+(`/home/owner/share/tvbBookmarks.json`), with a copy in the storage of the TVB home page.
+The bookmark service listens only on the TV itself (127.0.0.1). Nothing is collected or sent anywhere.
 
 ## Uninstalling
 
 In the TizenBrew module manager, select the module and remove it.
-The module does not change anything on the TV outside TizenBrew.
+The module does not change anything on the TV outside TizenBrew (apart from the bookmarks file above).
 
 ## Safety
 
