@@ -56,14 +56,14 @@ New to TizenBrew? Follow the step-by-step [TV setup guide](docs/TV-SETUP.md).
 2. Go to the **module manager** and choose **add GitHub module**.
 3. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.1.1
+   tvbrew-mods/tvb@v0.1.2
    ```
 4. Go back to the TizenBrew home screen and launch **TV Browser**.
 
 Specifying the version prevents an old cached copy from being loaded.
 
 If the module does not start, your TV may not support the GUIDE key: remove it and add
-`tvbrew-mods/tvb@v0.1.1-safe` instead (same features; open the key guide from the **Guide** button on the home page).
+`tvbrew-mods/tvb@v0.1.2-safe` instead (same features; open the key guide from the **Guide** button on the home page).
 
 ## Bookmarks and privacy
 

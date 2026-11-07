@@ -9,7 +9,7 @@
  *   GET  /bookmarks        -> { ok: true, bookmarks: [...] }
  *   POST /bookmarks        -> body { url, title }   -> { ok: true, result: "added" | "exists" | "full" }
  *   PUT  /bookmarks        -> body { bookmarks: [...] } (rename, move, delete) -> { ok: true }
- *   GET  /ping             -> { ok: true, version }
+ *   GET  /ping             -> { ok: true, version, node, file, lastError } (diagnostics)
  * Bookmarks are kept in a JSON file next to TizenBrew's own configuration.
  *
  * Written in plain ES5 (the TV may run an old Node.js version).
@@ -17,7 +17,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.1.1';
+  var VERSION = '0.1.2';
   var PORT = 8095;
   var HOST = '127.0.0.1';
   var DATA_DIR = '/home/owner/share';
@@ -30,7 +30,10 @@
   var http = require('http');
   var fs = require('fs');
 
+  var lastError = '';   // last read/write problem, reported by /ping (shown by INFO on the home page)
+
   function log(text) {
+    lastError = String(text).substring(0, 200);
     try {
       console.log('[TVB service] ' + text);
     } catch (e) { /* ignore */ }
@@ -66,7 +69,7 @@
       }
       return cleanList(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
     } catch (e) {
-      log('read error: ' + e.message);
+      log('read error: ' + (e && e.message ? e.message : e));
       return [];
     }
   }
@@ -79,9 +82,24 @@
       fs.renameSync(tmp, DATA_FILE);
       return true;
     } catch (e) {
-      log('write error: ' + e.message);
+      log('write error: ' + (e && e.message ? e.message : e));
       try { fs.unlinkSync(tmp); } catch (e2) { /* ignore */ }
       return false;
+    }
+  }
+
+  function nodeVersion() {
+    try { return String(process.version); } catch (e) { return '?'; }
+  }
+
+  // Can the bookmarks file be written? Checked without changing it.
+  function fileStatus() {
+    try {
+      var W_OK = fs.constants && fs.constants.W_OK !== undefined ? fs.constants.W_OK : fs.W_OK;
+      fs.accessSync(fs.existsSync(DATA_FILE) ? DATA_FILE : DATA_DIR, W_OK);
+      return (fs.existsSync(DATA_FILE) ? 'writable, ' + readBookmarks().length + ' saved' : 'writable, no file yet');
+    } catch (e) {
+      return 'NOT writable: ' + (e && e.message ? e.message : e);
     }
   }
 
@@ -99,9 +117,10 @@
   }
 
   function readBody(req, callback) {
-    var chunks = [];
+    var text = '';
     var size = 0;
     var done = false;
+    try { req.setEncoding('utf8'); } catch (e) { /* ignore */ }
     req.on('data', function (chunk) {
       if (done) {
         return;
@@ -113,7 +132,7 @@
         try { req.destroy(); } catch (e) { /* ignore */ }
         return;
       }
-      chunks.push(chunk);
+      text += String(chunk);
     });
     req.on('end', function () {
       if (done) {
@@ -121,7 +140,7 @@
       }
       done = true;
       try {
-        callback(null, JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
+        callback(null, JSON.parse(text || '{}'));
       } catch (e) {
         callback(new Error('invalid json'));
       }
@@ -142,7 +161,7 @@
       return;
     }
     if (path === '/ping') {
-      send(res, 200, { ok: true, version: VERSION });
+      send(res, 200, { ok: true, version: VERSION, node: nodeVersion(), file: fileStatus(), lastError: lastError });
       return;
     }
     if (path !== '/bookmarks') {

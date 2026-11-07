@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.1.1';
+  var VERSION = '0.1.2';
   var MODULE_ID = 'gh/tvbrew-mods/tvb@v' + VERSION;
   // TVB home page, served by TizenBrew's local module proxy
   var HOME_URL = 'http://127.0.0.1:8081/module/' + encodeURIComponent(MODULE_ID) + '/home.html';
@@ -381,7 +381,7 @@
       s.whiteSpace = 'nowrap';
       s.textAlign = 'center';
       s.color = '#ffffff';
-      glassStyle(s, 0.58);
+      glassStyle(s, 0.70);
       s.borderRadius = '9999px';
     }
     applyScaleTo(notice, 22);
@@ -919,7 +919,7 @@
     s.width = Math.round(1150 * k) + 'px';
     s.padding = Math.round(28 * k) + 'px ' + Math.round(36 * k) + 'px';
     s.color = '#ffffff';
-    glassStyle(s, 0.84); // sites can be bright and busy: a bit more tint than the home
+    glassStyle(s, 0.90); // sites can be bright and busy: a bit more tint than the home
     s.borderRadius = Math.round(28 * k) + 'px';
     s.fontSize = Math.round(24 * k) + 'px';
 
@@ -977,17 +977,65 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Bookmarks: saved by the home page (fixed origin), never in the website
+  // Bookmarks: saved by the TVB service (service.js on 127.0.0.1), never in the website.
+  // 1) direct request to the service; 2) if the site blocks it (CSP), the home page in a
+  // hidden frame; 3) if that fails too, the home page in the main window, then back.
   // ---------------------------------------------------------------------------
+  var SERVICE_URL = 'http://127.0.0.1:8095';
   var pendingAdd = null;
+  var bookmarkLog = '-'; // last attempt, shown in the debug panel (INFO)
 
-  function bookmarkUrl(mode) {
+  function logBookmark(text) {
+    bookmarkLog = shorten(text, 160);
+    scheduleRender();
+  }
+
+  function pageTitle() {
     var title = '';
     try {
       title = document.title || loc.hostname;
     } catch (e) { /* ignore */ }
+    return shorten(title, 100);
+  }
+
+  function bookmarkUrl(mode) {
     return HOME_URL + '?mode=' + mode + '&add=' + encodeURIComponent(w.location.href) +
-      '&title=' + encodeURIComponent(shorten(title, 100));
+      '&title=' + encodeURIComponent(pageTitle());
+  }
+
+  // Small XHR helper for the service. callback(errorText, data)
+  function serviceRequest(method, path, body, callback, timeoutMs) {
+    var done = false;
+    function finish(err, data) {
+      if (!done) {
+        done = true;
+        try { callback(err, data); } catch (e) { addError('TVB bookmark: ' + (e && e.message ? e.message : e)); }
+      }
+    }
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open(method, SERVICE_URL + path, true);
+      xhr.timeout = timeoutMs || 2500;
+      xhr.onload = function () {
+        var data = null;
+        try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+        if (data && data.ok) {
+          finish(null, data);
+        } else {
+          finish('HTTP ' + xhr.status + (data && data.error ? ' ' + data.error : ''), data);
+        }
+      };
+      xhr.onerror = function () { finish('blocked or unreachable'); };
+      xhr.ontimeout = function () { finish('timeout'); };
+      if (body) {
+        xhr.setRequestHeader('Content-Type', 'text/plain'); // simple request, no CORS preflight
+        xhr.send(JSON.stringify(body));
+      } else {
+        xhr.send();
+      }
+    } catch (e) {
+      finish('exception: ' + (e && e.message ? e.message : e));
+    }
   }
 
   function addBookmark() {
@@ -998,7 +1046,29 @@
     if (pendingAdd) {
       return;
     }
-    // First try without leaving the page: the home page in a hidden frame
+    pendingAdd = { frame: null, timer: null };
+    logBookmark('direct: sending...');
+    serviceRequest('POST', '/bookmarks', { url: w.location.href.split('#')[0], title: pageTitle() },
+      function (err, data) {
+        if (!pendingAdd) {
+          return;
+        }
+        if (!err && data && data.result) {
+          logBookmark('direct: ' + data.result);
+          finishBookmark(String(data.result));
+        } else if (data && data.error === 'write failed') {
+          // The service answered but could not write its file: other routes would fail the same way
+          logBookmark('direct: ' + err);
+          finishBookmark('writefailed');
+        } else {
+          logBookmark('direct: ' + err + ' -> frame');
+          startBookmarkFrame();
+        }
+      });
+  }
+
+  // The site blocked the direct request: try the home page in a hidden frame
+  function startBookmarkFrame() {
     var frame = document.createElement('iframe');
     frame.setAttribute('data-tvb', 'bookmark-frame');
     var s = frame.style;
@@ -1011,11 +1081,20 @@
     s.border = '0';
     s.pointerEvents = 'none';
     frame.src = bookmarkUrl('frame');
-    pendingAdd = {
-      frame: frame,
-      timer: w.setTimeout(safe(bookmarkFallback), BOOKMARK_TIMEOUT_MS)
-    };
+    pendingAdd.frame = frame;
+    pendingAdd.timer = w.setTimeout(safe(function () {
+      logBookmark(bookmarkLog + ' -> frame: no answer -> home');
+      bookmarkFallback();
+    }), BOOKMARK_TIMEOUT_MS);
     attach(frame);
+  }
+
+  function endPendingAdd() {
+    if (pendingAdd) {
+      w.clearTimeout(pendingAdd.timer);
+      detach(pendingAdd.frame);
+      pendingAdd = null;
+    }
   }
 
   function finishBookmark(result) {
@@ -1023,32 +1102,32 @@
       return;
     }
     if (result === 'noservice') {
-      // The bookmark service did not answer: save through the home page instead
+      // The bookmark service did not answer the frame: save through the home page instead
+      logBookmark(bookmarkLog + ' -> frame: noservice -> home');
       bookmarkFallback();
       return;
     }
-    w.clearTimeout(pendingAdd.timer);
-    detach(pendingAdd.frame);
-    pendingAdd = null;
+    endPendingAdd();
     if (result === 'exists') {
       showNotice('Già nei preferiti', 2500);
     } else if (result === 'added') {
       showNotice('Aggiunto ai preferiti', 2500);
     } else if (result === 'full') {
       showNotice('Troppi preferiti: eliminane qualcuno dalla home', 3000);
+    } else if (result === 'writefailed') {
+      showNotice('Preferito non salvato: errore di scrittura sulla TV (premi INFO)', 4000);
     } else {
-      showNotice('Impossibile salvare il preferito', 3000);
+      showNotice('Impossibile salvare il preferito (premi INFO)', 3000);
     }
   }
 
-  // The site blocked the hidden frame: save through the home page and come back
+  // Last resort: save through the home page in the main window and come back
   function bookmarkFallback() {
     if (!pendingAdd) {
       return;
     }
-    w.clearTimeout(pendingAdd.timer);
-    detach(pendingAdd.frame);
-    pendingAdd = null;
+    endPendingAdd();
+    showNotice('Salvo il preferito dalla home...', 1500);
     navigate(bookmarkUrl('nav'));
   }
 
@@ -1140,6 +1219,7 @@
     for (var i = 0; i < media.length; i++) {
       lines.push('  ' + media[i]);
     }
+    lines.push('Bookmark: ' + bookmarkLog);
     lines.push('Keys: ' + (keys.length ? keys.join(', ') : '-'));
     lines.push('Errors:' + (errors.length ? '' : ' none'));
     for (var j = 0; j < errors.length; j++) {
@@ -1684,7 +1764,8 @@
     }
     // Answer from the home page in the hidden bookmark frame
     if (msg.__tvbHome === 1) {
-      if (pendingAdd && ev.source === pendingAdd.frame.contentWindow) {
+      if (pendingAdd && pendingAdd.frame && ev.source === pendingAdd.frame.contentWindow) {
+        logBookmark(bookmarkLog + ' -> frame: ' + msg.result);
         finishBookmark(String(msg.result));
       }
       return;
