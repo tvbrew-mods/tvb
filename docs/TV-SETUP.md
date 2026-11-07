@@ -62,7 +62,7 @@ Host PC IP is `127.0.0.1`. Without this setting, website mods like TVB do not wo
 1. In TizenBrew, open the **module manager** and choose **add GitHub module**.
 2. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.1.2
+   tvbrew-mods/tvb@v0.1.3
    ```
 3. Go back to the TizenBrew home screen and launch **TV Browser**.
 4. The TVB home page opens. Press **GUIDE** at any time to see all the remote keys.
@@ -72,16 +72,17 @@ When you update TVB, remove the old version from the module manager and add the 
 
 ## Troubleshooting
 
-- **The module does nothing when pressing OK:** your TV may not accept the GUIDE key.
-  Remove the module and add `tvbrew-mods/tvb@v0.1.2-safe` instead (open the key guide from the **Guide** button
-  on the home page).
-  Also make sure older TVB versions are removed from the module manager.
+- **The module does nothing when pressing OK:**
+  Make sure you added the latest version and that older TVB versions are removed from the module manager.
 - **The home page says "Funzioni sui siti non attive" (website features not active):** TizenBrew is not injecting
   TVB into websites. Press **EXIT**, wait a few seconds and open TizenBrew again. If it keeps happening,
   restart the TV (hold the power button on the remote until the logo appears).
 - **Bookmarks are not saved, or are lost after a restart:** press **INFO** on the home page: the technical panel shows
   whether the bookmark service is running. If it is not, exit with EXIT and reopen TizenBrew; bookmarks are still
   kept in the home page in the meantime.
+- **The phone remote page does not open:** check that the phone is on the same Wi-Fi network as the TV and
+  use the address shown in the TV's key guide (GUIDE). If the guide says the remote is not available, restart
+  the TV once.
 - **Use EXIT, not Home, to leave:** Home only suspends TizenBrew, and when you come back the website features
   may not work until you exit with EXIT and reopen it.
 

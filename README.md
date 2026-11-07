@@ -3,8 +3,8 @@
 A [TizenBrew](https://github.com/reisxd/TizenBrew) module that makes browsing the web on Samsung (Tizen) smart TVs
 comfortable with the remote control.
 
-> **Status: early version (v0.1.1).** Home page with bookmarks, remote-friendly navigation, a virtual cursor
-> and basic video controls. Popup blocking and more video features are planned.
+> **Status: early version (v0.1.3).** Home page with bookmarks, remote-friendly navigation, a virtual cursor,
+> basic video controls and a phone remote. Popup blocking and more video features are planned.
 
 ## Features
 
@@ -14,6 +14,8 @@ comfortable with the remote control.
 - **Bookmarks:** add any page with one key, without leaving it; rename, reorder and delete them from the home page
 - **Video:** full screen with one key, play / pause and 10-second jumps with the media keys
 - **Loading bar** while a page loads, and a white background for pages that don't set one
+- **Phone remote:** control TVB from your phone's browser (arrows, OK, keys) and type into text fields
+  with the phone keyboard
 - **Key guide** always one key away
 - Keys pressed while an embedded frame (for example a video player or a cookie banner) has the focus still work
 
@@ -34,6 +36,19 @@ comfortable with the remote control.
 | GUIDE | key guide | key guide |
 | INFO | technical information (debug) | technical information (debug) |
 | EXIT | exit the app | exit the app |
+
+## Phone remote
+
+Press **GUIDE** on the TV: the guide shows an address (for example `http://192.168.1.50:8096`) and a password.
+Open the address in your phone's browser (same Wi-Fi network), enter the password and use the phone as a remote.
+When a text field is open on the TV, a text box appears on the phone: type and press **Invia** (send).
+
+- The password has 8 characters and changes every time TVB starts.
+- After several wrong passwords the page pauses for a minute.
+- The phone can only send keys and text: it cannot see bookmarks or pages.
+- The home network connection is not encrypted: do not type passwords of other websites from the phone.
+- Websites with a strict security policy (for example Wikipedia) do not accept commands from the phone:
+  use the TV remote there.
 
 ## Planned
 
@@ -56,20 +71,21 @@ New to TizenBrew? Follow the step-by-step [TV setup guide](docs/TV-SETUP.md).
 2. Go to the **module manager** and choose **add GitHub module**.
 3. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.1.2
+   tvbrew-mods/tvb@v0.1.3
    ```
 4. Go back to the TizenBrew home screen and launch **TV Browser**.
 
 Specifying the version prevents an old cached copy from being loaded.
 
-If the module does not start, your TV may not support the GUIDE key: remove it and add
-`tvbrew-mods/tvb@v0.1.2-safe` instead (same features; open the key guide from the **Guide** button on the home page).
+After updating TVB, restart the TV once if bookmarks or the phone remote don't work: an older version's
+service may still be running (from v0.1.3 on, a new version replaces the old one by itself).
 
 ## Bookmarks and privacy
 
 Bookmarks are stored only on your TV: in a small file managed by TVB inside TizenBrew's storage
 (`/home/owner/share/tvbBookmarks.json`), with a copy in the storage of the TVB home page.
-The bookmark service listens only on the TV itself (127.0.0.1). Nothing is collected or sent anywhere.
+The bookmark service listens only on the TV itself (127.0.0.1). The phone remote listens on your home network
+(port 8096) and requires the password shown on the TV. Nothing is collected or sent anywhere.
 
 ## Uninstalling
 

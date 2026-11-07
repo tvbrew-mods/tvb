@@ -20,7 +20,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '0.1.2';
+  var VERSION = '0.1.3';
   var MODULE_ID = 'gh/tvbrew-mods/tvb@v' + VERSION;
   // TVB home page, served by TizenBrew's local module proxy
   var HOME_URL = 'http://127.0.0.1:8081/module/' + encodeURIComponent(MODULE_ID) + '/home.html';
@@ -29,7 +29,7 @@
   var MAX_SEEN_URLS = 300;      // media URLs remembered to avoid duplicates
   var TICK_MS = 1000;           // periodic refresh
   var EXIT_CONFIRM_MS = 5000;
-  var BOOKMARK_TIMEOUT_MS = 8000; // the home page retries the service for a few seconds
+  var BOOKMARK_TIMEOUT_MS = 4000; // hidden frame route: the service answers in well under a second
   var CURSOR_STEP = 14;         // px per key press, multiplied by the acceleration
   var CURSOR_MAX_ACCEL = 5;
   var EDGE_SCROLL = 160;        // px scrolled when the cursor pushes an edge
@@ -779,6 +779,7 @@
     typingTarget = el;
     try { el.focus(); } catch (e) { /* ignore */ }
     updateRing();
+    reportTyping();
   }
 
   function isTyping() {
@@ -793,6 +794,7 @@
       try { active.blur(); } catch (e) { /* ignore */ }
     }
     updateRing();
+    reportTyping();
   }
 
   // ---------------------------------------------------------------------------
@@ -945,6 +947,23 @@
       row.appendChild(d);
       guide.appendChild(row);
     }
+    var remoteLine = document.createElement('div');
+    remoteLine.style.marginTop = Math.round(14 * k) + 'px';
+    remoteLine.style.fontSize = Math.round(21 * k) + 'px';
+    remoteLine.style.color = '#ffffff';
+    remoteLine.textContent = 'Telecomando dal cellulare: ...';
+    guide.appendChild(remoteLine);
+    serviceRequest('GET', '/remote/info', null, function (err, data) {
+      if (!guide) {
+        return;
+      }
+      if (err || !data || !data.url || !data.running) {
+        remoteLine.textContent = 'Telecomando dal cellulare: indirizzo e password nella guida della home';
+        return;
+      }
+      remoteLine.textContent = 'Telecomando dal cellulare: ' + data.url + '   password: ' + data.password;
+    }, 3000);
+
     var foot = document.createElement('div');
     foot.textContent = 'GUIDE o RETURN per chiudere  -  v' + VERSION;
     foot.style.marginTop = Math.round(16 * k) + 'px';
@@ -1043,6 +1062,16 @@
       showNotice('Questa pagina non può essere aggiunta ai preferiti', 2500);
       return;
     }
+    // Second press after "premi di nuovo B", or a site already known to block the other routes:
+    // go through the home page right away. The navigation must start from the key press itself
+    // (the TV ignores navigations started later by a timer).
+    if (askAgainUntil > Date.now() || routeKnownBlocked()) {
+      askAgainUntil = 0;
+      endPendingAdd();
+      logBookmark('via home (site blocks the direct routes)');
+      navigate(bookmarkUrl('nav'));
+      return;
+    }
     if (pendingAdd) {
       return;
     }
@@ -1083,8 +1112,8 @@
     frame.src = bookmarkUrl('frame');
     pendingAdd.frame = frame;
     pendingAdd.timer = w.setTimeout(safe(function () {
-      logBookmark(bookmarkLog + ' -> frame: no answer -> home');
-      bookmarkFallback();
+      logBookmark(bookmarkLog + ' -> frame: no answer -> ask again');
+      askAgain();
     }), BOOKMARK_TIMEOUT_MS);
     attach(frame);
   }
@@ -1103,7 +1132,7 @@
     }
     if (result === 'noservice') {
       // The bookmark service did not answer the frame: save through the home page instead
-      logBookmark(bookmarkLog + ' -> frame: noservice -> home');
+      logBookmark(bookmarkLog + ' -> frame: noservice -> ask again');
       bookmarkFallback();
       return;
     }
@@ -1121,14 +1150,32 @@
     }
   }
 
-  // Last resort: save through the home page in the main window and come back
-  function bookmarkFallback() {
+  // The site blocks both the direct request and the hidden frame (e.g. Wikipedia's CSP).
+  // The last route (through the home page) needs a key press: ask for B again and remember
+  // the site for this session, so that next time one press is enough.
+  var askAgainUntil = 0;
+  var ROUTE_KEY = 'tvb.bookmarkRoute';
+
+  function routeKnownBlocked() {
+    try {
+      return w.sessionStorage.getItem(ROUTE_KEY) === 'home';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function askAgain() {
     if (!pendingAdd) {
       return;
     }
     endPendingAdd();
-    showNotice('Salvo il preferito dalla home...', 1500);
-    navigate(bookmarkUrl('nav'));
+    try { w.sessionStorage.setItem(ROUTE_KEY, 'home'); } catch (e) { /* ignore */ }
+    askAgainUntil = Date.now() + 10000;
+    showNotice('Questo sito blocca il salvataggio diretto: premi di nuovo B', 5000);
+  }
+
+  function bookmarkFallback() {
+    askAgain();
   }
 
   // ---------------------------------------------------------------------------
@@ -1219,7 +1266,7 @@
     for (var i = 0; i < media.length; i++) {
       lines.push('  ' + media[i]);
     }
-    lines.push('Bookmark: ' + bookmarkLog);
+    lines.push('Bookmark: ' + bookmarkLog + '  |  phone remote: ' + remoteLog);
     lines.push('Keys: ' + (keys.length ? keys.join(', ') : '-'));
     lines.push('Errors:' + (errors.length ? '' : ' none'));
     for (var j = 0; j < errors.length; j++) {
@@ -1466,7 +1513,9 @@
       return false;
     }
     try {
-      if (cmd === 'play') {
+      if (cmd === 'toggle') {
+        if (v.paused) { v.play(); } else { v.pause(); }
+      } else if (cmd === 'play') {
         v.play();
       } else if (cmd === 'pause') {
         v.pause();
@@ -1831,7 +1880,240 @@
       exitFull();
     } else if (msg.type === 'videoCmd') {
       videoCommand(String(data.cmd));
+    } else if (msg.type === 'remoteKey') {
+      remoteKeyHere(String(data.key));
+    } else if (msg.type === 'remoteText') {
+      remoteTextHere(String(data.text), !!data.submit);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phone remote: commands sent from the phone page arrive through the TVB service
+  // (long poll from the main page). Sites with a strict CSP (e.g. Wikipedia) block it.
+  // ---------------------------------------------------------------------------
+  var REMOTE_KEYS = {
+    up: KEY.UP, down: KEY.DOWN, left: KEY.LEFT, right: KEY.RIGHT, ok: KEY.OK, back: KEY.BACK,
+    red: KEY.RED, green: KEY.GREEN, yellow: KEY.YELLOW, blue: KEY.BLUE,
+    tools: KEY.TOOLS, guide: KEY.GUIDE, info: KEY.INFO
+  };
+  var remoteAfter = 'now';
+  var remoteFails = 0;
+  var remoteOk = false;      // the service answered at least once on this page
+  var remoteLog = '-';       // shown in the debug panel
+  var typingReported = false;
+  var reportedOnce = false;
+  var typingValueTimer = null;
+
+  function pollRemote() {
+    serviceRequest('GET', '/remote/next?after=' + remoteAfter, null, function (err, data) {
+      if (err || !data) {
+        remoteFails += 1;
+        remoteLog = 'error: ' + err + ' (' + remoteFails + ')';
+        scheduleRender();
+        // service missing or blocked by the site: retry more and more slowly (max 1 per minute)
+        w.setTimeout(safe(pollRemote), Math.min(60000, 3000 * Math.pow(2, Math.min(remoteFails, 5))));
+        return;
+      }
+      if (!remoteOk) {
+        remoteOk = true;
+        reportTyping(); // tell the phone where we are
+      }
+      remoteFails = 0;
+      remoteAfter = String(data.last);
+      var list = data.commands || [];
+      for (var i = 0; i < list.length; i++) {
+        try {
+          runRemoteCommand(list[i]);
+        } catch (e) {
+          addError('TVB remote: ' + (e && e.message ? e.message : e));
+        }
+      }
+      if (list.length) {
+        remoteLog = 'ok, last: ' + (list[list.length - 1].key || 'text');
+        scheduleRender();
+      } else if (remoteLog === '-' || remoteLog.indexOf('error') === 0) {
+        remoteLog = 'connected';
+        scheduleRender();
+      }
+      w.setTimeout(safe(pollRemote), 20);
+    }, 30000);
+  }
+
+  // The focused iframe, when it runs TVB (it then handles the command itself)
+  function focusedFrameWindow() {
+    var active = document.activeElement;
+    if (active && active.tagName === 'IFRAME' && active.contentWindow && frames.length) {
+      return active.contentWindow;
+    }
+    return null;
+  }
+
+  function runRemoteCommand(cmd) {
+    pushLimited(keys, 'phone:' + (cmd.type === 'key' ? cmd.key : 'text'));
+    var frameWin = focusedFrameWindow();
+    if (cmd.type === 'text') {
+      if (frameWin && !isTyping()) {
+        postTo(frameWin, 'remoteText', { text: cmd.text, submit: cmd.submit });
+      } else {
+        remoteTextHere(String(cmd.text || ''), !!cmd.submit);
+      }
+      return;
+    }
+    var key = String(cmd.key);
+    var code = REMOTE_KEYS[key];
+    var global = code && isGlobalKey(code) && code !== KEY.BACK;
+    if (frameWin && !global && key !== 'scrollup' && key !== 'scrolldown') {
+      postTo(frameWin, 'remoteKey', { key: key });
+      return;
+    }
+    remoteKeyHere(key);
+  }
+
+  // A phone key, handled in this document (main page or iframe)
+  function remoteKeyHere(key) {
+    if (key === 'scrollup' || key === 'scrolldown') {
+      scrollPage(key === 'scrollup' ? 'up' : 'down');
+      return;
+    }
+    if (key === 'playpause' || key === 'rewind' || key === 'forward') {
+      videoCommand(key === 'playpause' ? 'toggle' : key);
+      return;
+    }
+    var code = REMOTE_KEYS[key];
+    if (!code) {
+      return;
+    }
+    if (isTop) {
+      handleKey(code, null);
+    } else {
+      handleFrameKey(code);
+    }
+    scheduleRender();
+  }
+
+  // Text from the phone: into the field being typed (or the focused field)
+  function remoteTextHere(text, submit) {
+    var el = isTyping() ? typingTarget : document.activeElement;
+    if (!isEditable(el)) {
+      if (isTop) {
+        showNotice('Seleziona prima un campo di testo', 2500);
+      }
+      return;
+    }
+    setFieldText(el, text);
+    if (submit) {
+      submitField(el);
+      stopTyping();
+    } else {
+      reportTyping();
+    }
+  }
+
+  function fireEvent(el, type) {
+    var ev;
+    try {
+      ev = new Event(type, { bubbles: true });
+    } catch (e) {
+      ev = document.createEvent('Event');
+      ev.initEvent(type, true, true);
+    }
+    el.dispatchEvent(ev);
+  }
+
+  function setFieldText(el, text) {
+    if (el.isContentEditable && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') {
+      el.textContent = text;
+    } else {
+      // The prototype setter also updates fields managed by frameworks (React and similar)
+      var proto = el.tagName === 'TEXTAREA' ? w.HTMLTextAreaElement.prototype : w.HTMLInputElement.prototype;
+      var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) {
+        desc.set.call(el, text);
+      } else {
+        el.value = text;
+      }
+    }
+    fireEvent(el, 'input');
+    fireEvent(el, 'change');
+  }
+
+  function fireEnter(el, type) {
+    var ev;
+    try {
+      ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter' });
+    } catch (e) {
+      ev = document.createEvent('Event');
+      ev.initEvent(type, true, true);
+    }
+    try {
+      Object.defineProperty(ev, 'keyCode', { get: function () { return 13; } });
+      Object.defineProperty(ev, 'which', { get: function () { return 13; } });
+    } catch (e) { /* ignore */ }
+    return el.dispatchEvent(ev);
+  }
+
+  // "Invia": Enter on the field; if the page did not handle it, submit its form
+  function submitField(el) {
+    var notHandled = fireEnter(el, 'keydown');
+    fireEnter(el, 'keypress');
+    fireEnter(el, 'keyup');
+    var form = el.form || closestTag(el, 'FORM');
+    if (!notHandled || !form) {
+      return;
+    }
+    var buttons = form.querySelectorAll('button[type=submit], input[type=submit], button:not([type])');
+    if (buttons.length) {
+      buttons[0].click();
+    } else {
+      try { form.submit(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function fieldLabel(el) {
+    var text = '';
+    try {
+      text = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') ||
+        el.getAttribute('name') || '';
+    } catch (e) { /* ignore */ }
+    return shorten(text, 60);
+  }
+
+  // Tell the phone whether a field is open on the TV (the phone then shows a text box).
+  // The main page reports only once the service answered its long poll; iframes always try.
+  function reportTyping() {
+    if (isTop && !remoteOk) {
+      return;
+    }
+    var typing = isTyping();
+    if (!typing && !typingReported && reportedOnce) {
+      return; // nothing new to say
+    }
+    reportedOnce = true;
+    typingReported = typing;
+    var el = typing ? typingTarget : null;
+    var value = '';
+    if (el) {
+      try {
+        value = (el.isContentEditable && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') ? el.textContent : el.value;
+      } catch (e) { /* ignore */ }
+    }
+    serviceRequest('POST', '/remote/state', {
+      typing: typing,
+      value: String(value || '').substring(0, 1000),
+      label: el ? fieldLabel(el) : '',
+      site: loc.hostname || ''
+    }, function () {}, 3000);
+  }
+
+  // While typing with the TV keyboard, keep the phone's text box up to date (debounced)
+  function onTypingInput(ev) {
+    if (!typingReported || !ev || ev.target !== typingTarget) {
+      return;
+    }
+    if (typingValueTimer) {
+      w.clearTimeout(typingValueTimer);
+    }
+    typingValueTimer = w.setTimeout(safe(reportTyping), 400);
   }
 
   // ---------------------------------------------------------------------------
@@ -1840,6 +2122,7 @@
   try {
     w.addEventListener('keydown', safe(onKeyDown), true);
     document.addEventListener('click', safe(onClick), true);
+    document.addEventListener('input', safe(onTypingInput), true);
     document.addEventListener('playing', safe(onVideoPlaying), true); // media events do not bubble: capture
     w.addEventListener('message', safe(onMessage));
     w.addEventListener('scroll', safe(scheduleRing), true);
@@ -1869,6 +2152,7 @@
     if (isTop && document.readyState !== 'complete') {
       showLoadBar();
     }
+    fixBackground(); // right away: the page is often already loaded when we arrive
     document.addEventListener('DOMContentLoaded', safe(function () {
       reportFrame();
       fixBackground();
@@ -1880,9 +2164,18 @@
     }));
   } catch (e) { /* ignore */ }
 
+  if (isTop) {
+    w.setTimeout(safe(pollRemote), 300);
+  }
+
   var ticks = 0;
   w.setInterval(safe(function () {
     ticks += 1;
+    // the page closed the field by itself: tell the phone
+    if (typingReported && !isTyping()) {
+      typingTarget = null;
+      reportTyping();
+    }
     scanPage();
     if (current && !inDocument(current)) {
       current = null;

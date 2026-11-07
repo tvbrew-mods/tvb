@@ -1,0 +1,302 @@
+<!doctype html>
+<!-- TVB-REMOTE: phone remote page, served by service.js on the home network (port 8096) -->
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0a0a0c">
+<title>TV Browser - telecomando</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; }
+  body { min-height: 100vh; color: #ffffff; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+         background:
+           radial-gradient(circle at 85% 10%, rgba(120, 80, 255, 0.30) 0%, rgba(10, 10, 12, 0) 45%),
+           radial-gradient(circle at 15% 90%, rgba(0, 190, 220, 0.22) 0%, rgba(10, 10, 12, 0) 45%),
+           #0a0a0c;
+         -webkit-user-select: none; user-select: none; }
+  main { max-width: 420px; margin: 0 auto; padding: 16px 16px 28px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 4px 0 12px; color: #dfe1e7; }
+  .glass { background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(179, 179, 179, 0.05));
+           border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 22px;
+           box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.35); }
+  .hidden { display: none !important; }
+  #status { font-size: 14px; padding: 10px 14px; margin-bottom: 12px; color: #ffd28a; }
+  #status.ok { color: #9be39b; }
+  button { font: inherit; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 18px;
+           background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(179, 179, 179, 0.05));
+           box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35); padding: 14px 6px; font-size: 15px;
+           touch-action: manipulation; }
+  button:active { background: rgba(255, 255, 255, 0.28); transform: scale(0.97); }
+  .row { display: flex; gap: 10px; margin: 10px 0; }
+  .row button { flex: 1; }
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 72px); gap: 10px;
+         padding: 14px; margin: 12px 0; }
+  .pad button { font-size: 26px; border-radius: 20px; }
+  .pad .ok { background: #ffffff; color: #000000; font-size: 20px; font-weight: 700; border-radius: 50%; }
+  .pad .ok:active { background: #dcdcdc; }
+  .k-a { background: #d6453f; } .k-b { background: #3B9B3B; }
+  .k-c { background: #e0b400; color: #000000; } .k-d { background: #378ADD; }
+  label { display: block; font-size: 14px; color: #c3c5cd; margin: 0 0 8px; }
+  input[type=text], input[type=password] { width: 100%; font-size: 20px; padding: 14px 18px; color: #ffffff;
+           border-radius: 9999px; border: 2px solid rgba(255, 255, 255, 0.3); outline: none;
+           background: linear-gradient(180deg, rgba(0, 0, 0, 0.32), rgba(0, 0, 0, 0.18));
+           -webkit-user-select: text; user-select: text; }
+  input:focus { border-color: #2f9bff; }
+  #login, #textPanel { padding: 16px; margin-bottom: 12px; }
+  #textPanel { border-color: rgba(47, 155, 255, 0.6); }
+  .primary { background: #2f9bff; border-color: #2f9bff; font-weight: 600; }
+  .note { font-size: 13px; color: #9a9ca5; margin-top: 10px; line-height: 1.4; }
+  #err { color: #ff8a80; font-size: 14px; margin-top: 8px; min-height: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TV Browser · telecomando</h1>
+
+  <section id="login" class="glass hidden">
+    <label for="pw">Password (la trovi nella guida sulla TV: tasto GUIDE)</label>
+    <input id="pw" type="text" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    <div class="row"><button id="loginBtn" class="primary">Collega</button></div>
+    <div id="err"></div>
+    <div class="note">La password cambia a ogni avvio di TV Browser. Rete di casa non cifrata: non scrivere qui
+      password di altri siti.</div>
+  </section>
+
+  <section id="remote" class="hidden">
+    <div id="status" class="glass">Collegamento...</div>
+
+    <section id="textPanel" class="glass hidden">
+      <label id="textLabel" for="text">Scrivi nel campo della TV</label>
+      <input id="text" type="text" autocomplete="off" spellcheck="false">
+      <div class="row">
+        <button id="sendOnly">Solo scrivi</button>
+        <button id="sendGo" class="primary">Invia</button>
+      </div>
+    </section>
+
+    <div class="row">
+      <button data-key="back">↩ Indietro</button>
+      <button data-key="yellow" class="k-c">Home</button>
+      <button data-key="guide">Guida</button>
+    </div>
+
+    <div class="pad glass">
+      <span></span><button data-key="up" aria-label="su">▲</button><span></span>
+      <button data-key="left" aria-label="sinistra">◀</button>
+      <button data-key="ok" class="ok">OK</button>
+      <button data-key="right" aria-label="destra">▶</button>
+      <span></span><button data-key="down" aria-label="giù">▼</button><span></span>
+    </div>
+
+    <div class="row">
+      <button data-key="scrollup">Scorri ▲</button>
+      <button data-key="scrolldown">Scorri ▼</button>
+    </div>
+    <div class="row">
+      <button data-key="green" class="k-b">Preferito</button>
+      <button data-key="tools">Cursore</button>
+      <button data-key="blue" class="k-d">Modifica</button>
+    </div>
+    <div class="row">
+      <button data-key="red" class="k-a">Schermo intero</button>
+    </div>
+    <div class="row">
+      <button data-key="rewind" aria-label="indietro 10 secondi">◀◀ 10s</button>
+      <button data-key="playpause" aria-label="play pausa">▶ ❚❚</button>
+      <button data-key="forward" aria-label="avanti 10 secondi">10s ▶▶</button>
+    </div>
+    <div class="row">
+      <button data-key="info">Info</button>
+      <button id="logout">Esci</button>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  'use strict';
+  var STORE = 'tvb.remotePassword';
+  var password = '';
+  var version = 0;
+  var stateBusy = false;
+  var lastTyping = false;
+  var lastValue = '';
+
+  function $(id) { return document.getElementById(id); }
+
+  function load() {
+    try { return localStorage.getItem(STORE) || ''; } catch (e) { return ''; }
+  }
+  function save(p) {
+    try { if (p) { localStorage.setItem(STORE, p); } else { localStorage.removeItem(STORE); } } catch (e) { /* ignore */ }
+  }
+
+  function post(path, body, cb, timeout) {
+    var xhr = new XMLHttpRequest();
+    var done = false;
+    function finish(status, data) {
+      if (!done) { done = true; cb(status, data); }
+    }
+    xhr.open('POST', path, true);
+    xhr.timeout = timeout || 8000;
+    xhr.onload = function () {
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) { /* ignore */ }
+      finish(xhr.status, data);
+    };
+    xhr.onerror = function () { finish(0, null); };
+    xhr.ontimeout = function () { finish(0, null); };
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    body.password = password;
+    xhr.send(JSON.stringify(body));
+  }
+
+  function showLogin(message) {
+    $('remote').classList.add('hidden');
+    $('login').classList.remove('hidden');
+    $('err').textContent = message || '';
+    $('pw').value = password;
+  }
+
+  function authError(data) {
+    if (data && data.error === 'locked') {
+      return 'Troppi tentativi: riprova tra un minuto.';
+    }
+    return 'Password non corretta (guardala nella guida della TV).';
+  }
+
+  function setStatus(connected, text) {
+    var s = $('status');
+    s.className = 'glass' + (connected ? ' ok' : '');
+    s.textContent = text;
+  }
+
+  function login() {
+    password = $('pw').value.replace(/\s+/g, '').toUpperCase();
+    if (password.length !== 8) {
+      $('err').textContent = 'La password ha 8 caratteri.';
+      return;
+    }
+    $('err').textContent = 'Collegamento...';
+    post('/api/cmd', { type: 'hello' }, function (status, data) {
+      if (status === 200 && data && data.ok) {
+        save(password);
+        startRemote();
+      } else if (status === 403) {
+        $('err').textContent = authError(data);
+      } else {
+        $('err').textContent = 'TV non raggiungibile.';
+      }
+    });
+  }
+
+  function startRemote() {
+    $('login').classList.add('hidden');
+    $('remote').classList.remove('hidden');
+    version = 0;
+    pollState();
+  }
+
+  function applyState(st) {
+    if (st.tvConnected) {
+      setStatus(true, 'TV collegata' + (st.site ? ' · ' + st.site : ''));
+    } else {
+      setStatus(false, 'La TV non risponde: è aperto TV Browser? Su alcuni siti (es. Wikipedia) i comandi ' +
+        'dal cellulare non arrivano: usa il telecomando o torna alla home.');
+    }
+    var panel = $('textPanel');
+    var input = $('text');
+    if (st.typing) {
+      $('textLabel').textContent = st.label ? 'Scrivi: ' + st.label : 'Scrivi nel campo della TV';
+      var opening = !lastTyping;
+      panel.classList.remove('hidden');
+      if (opening || (document.activeElement !== input && st.value !== lastValue)) {
+        input.value = st.value || '';
+      }
+      if (opening) {
+        try { input.focus(); } catch (e) { /* ignore */ }
+      }
+    } else {
+      panel.classList.add('hidden');
+      if (document.activeElement === input) {
+        input.blur();
+      }
+    }
+    lastTyping = st.typing;
+    lastValue = st.value || '';
+  }
+
+  function pollState() {
+    if (stateBusy || !password) {
+      return;
+    }
+    stateBusy = true;
+    post('/api/state', { version: version }, function (status, data) {
+      stateBusy = false;
+      if (status === 403) {
+        showLogin(authError(data));
+        return;
+      }
+      if (status === 200 && data && data.ok) {
+        version = data.version;
+        applyState(data);
+        setTimeout(pollState, 50);
+      } else {
+        setStatus(false, 'TV non raggiungibile: è accesa e sulla stessa rete Wi-Fi?');
+        setTimeout(pollState, 3000);
+      }
+    }, 30000);
+  }
+
+  function sendKey(key) {
+    try { if (navigator.vibrate) { navigator.vibrate(12); } } catch (e) { /* ignore */ }
+    post('/api/cmd', { type: 'key', key: key }, function (status, data) {
+      if (status === 403) {
+        showLogin(authError(data));
+      } else if (status === 200 && data && !data.tvConnected) {
+        setStatus(false, 'Comando inviato, ma la TV non risponde su questa pagina.');
+      }
+    });
+  }
+
+  function sendText(submit) {
+    var text = $('text').value;
+    post('/api/cmd', { type: 'text', text: text, submit: submit }, function (status, data) {
+      if (status === 403) {
+        showLogin(authError(data));
+      }
+    });
+    if (submit) {
+      $('text').blur();
+    }
+  }
+
+  var buttons = document.querySelectorAll('[data-key]');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].addEventListener('click', function (ev) {
+      sendKey(ev.currentTarget.getAttribute('data-key'));
+    });
+  }
+  $('loginBtn').addEventListener('click', login);
+  $('pw').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { login(); } });
+  $('sendGo').addEventListener('click', function () { sendText(true); });
+  $('sendOnly').addEventListener('click', function () { sendText(false); });
+  $('text').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); sendText(true); }
+  });
+  $('logout').addEventListener('click', function () {
+    save('');
+    password = '';
+    showLogin('');
+  });
+
+  password = load();
+  if (password) {
+    startRemote();
+  } else {
+    showLogin('');
+  }
+})();
+</script>
+</body>
+</html>
