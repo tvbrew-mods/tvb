@@ -22,6 +22,8 @@ Known limitations: no support for DRM-protected content (Widevine).
 - Samsung TV with Tizen 3.0 or later (developed on a 2019 model running Tizen 5.0)
 - [TizenBrew](https://github.com/reisxd/TizenBrew) installed and working
 
+New to TizenBrew? Follow the step-by-step [TV setup guide](docs/TV-SETUP.md).
+
 ## Installing in TizenBrew
 
 1. Open TizenBrew on the TV.

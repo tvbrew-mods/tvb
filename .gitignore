@@ -1,8 +1,10 @@
 # File locali, da non pubblicare
 CLAUDE.md
 .claude/
+note/
 
 # File di sistema / editor
+*.stackdump
 Thumbs.db
 desktop.ini
 .DS_Store
