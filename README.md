@@ -1,19 +1,39 @@
 # TVB — TV Browser for TizenBrew
 
-A [TizenBrew](https://github.com/reisxd/TizenBrew) module that adds remote-control-friendly
-browsing features to Samsung (Tizen) smart TVs.
+A [TizenBrew](https://github.com/reisxd/TizenBrew) module that makes browsing the web on Samsung (Tizen) smart TVs
+comfortable with the remote control.
 
-> **Status: testing phase.** The current module only checks how TizenBrew injects the script
-> into web pages. It is not a usable browser yet.
+> **Status: early version (v0.1.0).** Home page with bookmarks, remote-friendly navigation and a virtual cursor.
+> Popup blocking and video features are planned.
 
-## Goals
+## Features
 
-1. Address bar, bookmarks and history usable with the remote
-2. Virtual cursor moved with the arrow keys (OK = click, scrolling at the edges)
-3. Blocking of popups, overlays and banners
-4. "Open the player": opens the video player's iframe as the main page
-5. "Extract video": finds the page's video streams (mp4, m3u8) and plays them in a
-   full-screen, remote-controlled player
+- **Home page** with clock, web search (Google) or address bar, and your bookmarks
+- **Highlight navigation:** the arrow keys move between links, buttons and fields; OK opens them
+- **Virtual cursor** for the parts of a page that highlight navigation can't reach
+- **Bookmarks:** add any page with one key; rename, reorder and delete them from the home page
+- **Key guide** always one key away
+- Keys pressed while an embedded frame (for example a video player or a cookie banner) has the focus still work
+
+## Remote keys
+
+| Key | On websites | On the home page |
+|---|---|---|
+| Arrows | highlight links, buttons and fields (the page scrolls when there is nothing else) | move between bookmarks, search and guide |
+| OK | open / press the highlighted element | open the selected item |
+| TOOLS (or 8) | turn the virtual cursor on / off | |
+| B (green) | add the page to the bookmarks | |
+| C (yellow) | back to the home page | |
+| D (blue) | | edit the bookmark: rename, move, delete |
+| RETURN | back (or close the guide / leave a frame) | |
+| INFO (or 9) | key guide | key guide |
+| EXIT | exit the app | exit the app |
+
+## Planned
+
+1. Blocking of popups, overlays and banners
+2. "Open the player": open an embedded video player as the main page
+3. "Extract video": find the page's video streams and play them in a full-screen, remote-controlled player
 
 Known limitations: no support for DRM-protected content (Widevine).
 
@@ -30,11 +50,18 @@ New to TizenBrew? Follow the step-by-step [TV setup guide](docs/TV-SETUP.md).
 2. Go to the **module manager** and choose **add GitHub module**.
 3. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.0.2
+   tvbrew-mods/tvb@v0.1.0
    ```
-4. Go back to the TizenBrew home screen and launch **TV Browser (test)**.
+4. Go back to the TizenBrew home screen and launch **TV Browser**.
 
-Specifying the version (`@v0.0.1`) prevents an old cached copy from being loaded.
+Specifying the version prevents an old cached copy from being loaded.
+
+If the module does not start, your TV may not support the TOOLS and INFO keys: remove it and add
+`tvbrew-mods/tvb@v0.1.0-safe` instead (same features, use 8 and 9 instead of TOOLS and INFO).
+
+## Bookmarks and privacy
+
+Bookmarks are stored only on your TV, in the storage of the TVB home page. Nothing is collected or sent anywhere.
 
 ## Uninstalling
 
@@ -46,9 +73,9 @@ The module does not change anything on the TV outside TizenBrew.
 The module is designed to be harmless:
 
 - it runs only inside TizenBrew and does not touch the TV's settings or system;
-- it does not intercept system keys (Home, Back/Exit, Volume, Power);
-- every error is caught and shown on screen without freezing the page;
-- it does not collect or send any data.
+- it never intercepts system keys (Home, EXIT, volume, channels, power);
+- every error is caught without freezing the page;
+- links that would open new windows open in the same page instead.
 
 ## Notes
 

@@ -1,71 +1,69 @@
 /*
- * TVB - test module for TizenBrew.
+ * TVB - TV Browser for TizenBrew.
  *
- * Goal: answer as many questions as possible in a single test session.
- *  - Injection: does the script survive navigation, run once per page, run in iframes?
- *  - Remote keys: can keys received inside iframes be handled by the main page?
- *  - RETURN (Back) key handling and exit from the first page.
- *  - TV capabilities: Tizen APIs, video, JS features.
- *  - Media detection: XHR/fetch hooks, <video> elements, resources loaded before injection.
- *  - Feasibility tests for later phases: on-screen keyboard, simulated click,
- *    our own video player (native HLS and hls.js), local service reachability.
+ * Injected by TizenBrew into every web page (and iframe) opened by the module.
+ * Features:
+ *  - spatial navigation: the arrow keys highlight links, buttons and fields;
+ *    OK activates the highlighted element; the page scrolls when nothing is left
+ *  - virtual cursor (TOOLS or 8): arrows move a pointer, OK clicks, edges scroll
+ *  - key guide (INFO or 9)
+ *  - YELLOW: back to the TVB home page, GREEN: add the page to the bookmarks
+ *  - RETURN: close panels, leave an iframe, or go back
+ *  - debug overlay (0), hidden by default
+ *  - keys received inside iframes are forwarded to the main page
  *
  * Written in plain ES5 for the old Chromium engine of Tizen TVs.
  * Everything is wrapped in try/catch so the script can never break the page.
- *
- * Remote keys (handled by the main page, also when an iframe has the focus):
- *   1-5    -> test pages (example.com, Wikipedia, mp4 video, YouTube iframe, HLS demo)
- *   6      -> on-screen keyboard test
- *   7      -> simulated click at the center of the screen
- *   8      -> test player, native HLS
- *   9      -> test player, hls.js
- *   0      -> hide/show the debug overlay
- *   RED    -> next test page        YELLOW -> first test page
- *   GREEN  -> cross-origin test iframe   BLUE -> reload
- *   RETURN -> close panel/player; otherwise previous page; on the first page asks to exit
- * All other keys (arrows, OK, EXIT, Home, volume, media keys...) are never blocked.
+ * System keys (EXIT, Home, volume, channel, media keys) are never touched.
  */
 (function () {
   'use strict';
 
-  var VERSION = '0.0.2';
+  var VERSION = '0.1.0';
+  var MODULE_ID = 'gh/tvbrew-mods/tvb@v' + VERSION;
+  // TVB home page, served by TizenBrew's local module proxy
+  var HOME_URL = 'http://127.0.0.1:8081/module/' + encodeURIComponent(MODULE_ID) + '/home.html';
 
-  var MAX_ITEMS = 4;          // max lines kept for each list (keys, errors, frames, media)
-  var MAX_SEEN_URLS = 300;    // max media URLs remembered to avoid duplicates
-  var MAX_VIDEOS_SCANNED = 20;
-  var TICK_MS = 1000;         // overlay refresh / page scan interval
-  var ATTACH_RETRY_MS = 50;   // retry interval while the document has no root yet
-  var ATTACH_MAX_TRIES = 200; // give up after ~10 seconds
-  var EXIT_CONFIRM_MS = 5000; // time window to press RETURN again on the first page
-  var PLAYER_TIMEOUT_MS = 20000;
-  var LOCAL_SERVICE_TIMEOUT_MS = 4000;
+  var MAX_ITEMS = 5;            // lines kept for each debug list
+  var MAX_SEEN_URLS = 300;      // media URLs remembered to avoid duplicates
+  var TICK_MS = 1000;           // periodic refresh
+  var EXIT_CONFIRM_MS = 5000;
+  var BOOKMARK_TIMEOUT_MS = 5000;
+  var CURSOR_STEP = 14;         // px per key press, multiplied by the acceleration
+  var CURSOR_MAX_ACCEL = 5;
+  var EDGE_SCROLL = 160;        // px scrolled when the cursor pushes an edge
 
-  var KEY_RED = 403;
-  var KEY_GREEN = 404;
-  var KEY_YELLOW = 405;
-  var KEY_BLUE = 406;
-  var KEY_BACK = 10009;
+  var KEY = {
+    LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, OK: 13,
+    BACK: 10009, RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406,
+    TOOLS: 10135, INFO: 457
+  };
+  var DIR_BY_KEY = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
 
-  var TEST_PAGES = [
-    'https://example.com/',
-    'https://it.wikipedia.org/',
-    'https://www.w3schools.com/html/html5_video.asp',   // mp4 in a <video> element
-    'https://www.w3schools.com/html/html_youtube.asp',  // YouTube player in a cross-origin iframe
-    'https://hlsjs.video-dev.org/demo/'                 // HLS (m3u8) loaded via XHR/fetch
-  ];
-  var TEST_FRAME_URL = 'https://example.org/';
-  var TEST_HLS_URL = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
-  var HLSJS_URL = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js';
-  var LOCAL_SERVICE_URL = 'http://127.0.0.1:8081/'; // TizenBrew's own local service
+  var FOCUSABLE = 'a[href], button, input, select, textarea, summary, iframe, ' +
+    '[tabindex], [onclick], [role="button"], [role="link"], [role="menuitem"], ' +
+    '[role="tab"], [role="option"], [role="checkbox"], [contenteditable="true"]';
 
   var MEDIA_RE = /\.(m3u8|mpd|mp4|webm|m4s|ts)(\?|#|$)/i;
-  var SEGMENT_RE = /\.(m4s|ts)(\?|#|$)/i; // stream segments: counted, only the first one listed
+  var SEGMENT_RE = /\.(m4s|ts)(\?|#|$)/i;
+
+  var GUIDE = [
+    ['Frecce', 'evidenziano link e pulsanti (la pagina scorre quando non ce ne sono altri)'],
+    ['OK', 'apre o preme l\'elemento evidenziato'],
+    ['TOOLS (o 8)', 'attiva / disattiva il cursore'],
+    ['Cursore', 'frecce per muoverlo, OK per cliccare, ai bordi la pagina scorre'],
+    ['C (giallo)', 'torna alla home'],
+    ['B (verde)', 'aggiunge la pagina ai preferiti'],
+    ['RETURN', 'indietro (o chiude la guida, esce da un riquadro)'],
+    ['INFO (o 9)', 'apre / chiude questa guida'],
+    ['0', 'informazioni di debug'],
+    ['EXIT', 'esce dall\'app']
+  ];
 
   var w = window;
 
   // ---------------------------------------------------------------------------
-  // Run only on web pages (never on TizenBrew's own screens). about:blank is
-  // allowed inside iframes because some players build their content there.
+  // Where are we?
   // ---------------------------------------------------------------------------
   var isTop = true;
   try {
@@ -74,38 +72,37 @@
     isTop = false;
   }
 
-  var protocol = '';
+  var loc = { protocol: '', hostname: '', port: '', pathname: '', href: '' };
   try {
-    protocol = w.location.protocol;
+    loc.protocol = w.location.protocol;
+    loc.hostname = w.location.hostname;
+    loc.port = w.location.port;
+    loc.pathname = w.location.pathname;
+    loc.href = w.location.href;
   } catch (e) { /* ignore */ }
 
-  if (!(protocol === 'http:' || protocol === 'https:' || (protocol === 'about:' && !isTop))) {
+  // Only web pages. about:blank is allowed in iframes (some players build their content there).
+  if (!(loc.protocol === 'http:' || loc.protocol === 'https:' || (loc.protocol === 'about:' && !isTop))) {
     return;
   }
 
-  // ---------------------------------------------------------------------------
+  // Our own home page has its own interface: only signal that injection works.
+  if (loc.hostname === '127.0.0.1' && loc.port === '8081' && /\/home\.html$/.test(loc.pathname)) {
+    try {
+      if (!w.__TVB__) {
+        w.__TVB__ = { injected: true, version: VERSION };
+      }
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
   // Duplicate-run guard: only the first run in a document does the work.
-  // ---------------------------------------------------------------------------
   try {
     if (w.__TVB__) {
-      w.__TVB__.runs += 1;
-      if (typeof w.__TVB__.onRepeat === 'function') {
-        w.__TVB__.onRepeat();
-      }
+      w.__TVB__.runs = (w.__TVB__.runs || 1) + 1;
       return;
     }
-  } catch (e) {
-    return;
-  }
-
-  var state = {
-    version: VERSION,
-    runs: 1,
-    onRepeat: null
-  };
-
-  try {
-    w.__TVB__ = state;
+    w.__TVB__ = { injected: true, version: VERSION, runs: 1 };
   } catch (e) {
     return;
   }
@@ -121,14 +118,6 @@
         addError('TVB internal: ' + (e && e.message ? e.message : e));
       }
     };
-  }
-
-  function check(fn) {
-    try {
-      return fn();
-    } catch (e) {
-      return false;
-    }
   }
 
   function pushLimited(list, item) {
@@ -151,191 +140,68 @@
     return text.length > max ? text.substring(0, max - 3) + '...' : text;
   }
 
-  function yesNo(value) {
-    return value ? 'yes' : 'no';
-  }
-
-  function currentHost() {
-    try {
-      return w.location.hostname || w.location.href;
-    } catch (e) {
-      return '?';
-    }
-  }
-
-  function currentHref() {
-    try {
-      return w.location.href;
-    } catch (e) {
-      return '?';
-    }
-  }
-
-  function absoluteUrl(url) {
-    try {
-      var a = document.createElement('a');
-      a.href = url;
-      return a.href;
-    } catch (e) {
-      return String(url);
-    }
-  }
-
-  function hostOf(url) {
-    try {
-      var a = document.createElement('a');
-      a.href = url;
-      return a.hostname || shorten(url, 30);
-    } catch (e) {
-      return '?';
-    }
-  }
-
   function getRoot() {
     return document.body || document.documentElement;
   }
 
+  function viewport() {
+    return {
+      w: w.innerWidth || document.documentElement.clientWidth || 1920,
+      h: w.innerHeight || document.documentElement.clientHeight || 1080
+    };
+  }
+
+  function inDocument(el) {
+    return !!(el && document.documentElement && document.documentElement.contains(el));
+  }
+
+  function closestTag(el, tag) {
+    while (el && el.nodeType === 1) {
+      if (el.tagName === tag) {
+        return el;
+      }
+      el = el.parentNode;
+    }
+    return null;
+  }
+
   function isEditable(el) {
-    if (!el) {
+    if (!el || !el.tagName) {
       return false;
     }
-    var tag = (el.tagName || '').toUpperCase();
-    if (tag === 'TEXTAREA' || tag === 'SELECT') {
+    var tag = el.tagName;
+    if (tag === 'TEXTAREA') {
       return true;
     }
     if (tag === 'INPUT') {
       var type = String(el.type || 'text').toLowerCase();
-      return type !== 'button' && type !== 'submit' && type !== 'checkbox' &&
-        type !== 'radio' && type !== 'range' && type !== 'image' && type !== 'reset';
+      return type !== 'button' && type !== 'submit' && type !== 'checkbox' && type !== 'radio' &&
+        type !== 'range' && type !== 'image' && type !== 'reset' && type !== 'file' && type !== 'color';
     }
     return !!el.isContentEditable;
   }
 
   function describeElement(el) {
-    if (!el) {
-      return 'nothing';
+    if (!el || !el.tagName) {
+      return 'none';
     }
-    var text = '<' + String(el.tagName || '?').toLowerCase();
+    var text = '<' + el.tagName.toLowerCase();
     if (el.id) {
       text += ' #' + el.id;
     }
-    if (typeof el.className === 'string' && el.className) {
-      text += ' .' + el.className.split(' ')[0];
-    }
     text += '>';
-    var label = String(el.textContent || el.value || '').replace(/\s+/g, ' ');
+    var label = String(el.getAttribute('aria-label') || el.textContent || el.value || '').replace(/\s+/g, ' ');
     if (label) {
       text += ' "' + shorten(label, 30) + '"';
     }
     return text;
   }
 
-  // ---------------------------------------------------------------------------
-  // Collected information
-  // ---------------------------------------------------------------------------
-  var startTime = new Date();
-  var startReadyState = '?';
-  var startHadBody = false;
-  try {
-    startReadyState = document.readyState;
-    startHadBody = !!document.body;
-  } catch (e) { /* ignore */ }
-
-  var keys = [];     // last remote keys
-  var errors = [];   // last JS errors
-  var frames = [];   // iframes that reported TVB running inside them (main frame only)
-  var media = [];    // last detected media URLs
-  var mediaSeen = {};
-  var mediaSeenCount = 0;
-  var mediaTotal = 0;
-  var segmentCount = 0;
-  var videoCount = 0;
-  var iframeCount = 0;
-  var hooks = { xhr: false, fetch: false, perf: false };
-  var perfIndex = 0;
-
-  // Results of the feasibility tests (shown only once a test has been run)
-  var results = {
-    localService: 'testing...',
-    keyboard: '',
-    click: '',
-    player: '',
-    exit: ''
-  };
-
-  function addError(text) {
-    pushLimited(errors, clock(new Date()) + ' ' + shorten(text, 100));
-    scheduleRender();
-  }
-
-  function isFirstPage() {
-    // Pages opened from TizenBrew have no web referrer. Pages we navigate to
-    // (keys, links) have the previous page as referrer, also after going back.
-    var ref = '';
-    try {
-      ref = document.referrer || '';
-    } catch (e) { /* ignore */ }
-    return !(ref.indexOf('http:') === 0 || ref.indexOf('https:') === 0);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Capability detection
-  // ---------------------------------------------------------------------------
-  function mseType(type) {
-    return check(function () {
-      return !!(w.MediaSource && w.MediaSource.isTypeSupported(type));
-    });
-  }
-
-  function detectCapabilities() {
-    var video = check(function () { return document.createElement('video'); });
-    var hlsNative = check(function () {
-      return video ? video.canPlayType('application/vnd.apple.mpegurl') : '';
-    });
-    // Note: reports "no" also when the page forbids eval (Content Security Policy)
-    var es6Syntax = check(function () {
-      new Function('let a = 1; const f = (b) => `${a}${b}`; return f(2);');
-      return true;
-    });
-    var fullscreen = check(function () {
-      var el = document.documentElement;
-      return !!(el.requestFullscreen || el.webkitRequestFullscreen);
-    });
-
-    return [
-      'UA: ' + shorten(check(function () { return w.navigator.userAgent; }) || '?', 110),
-      'Tizen API: tizen ' + yesNo(check(function () { return typeof w.tizen !== 'undefined'; })) +
-        ' | webapis ' + yesNo(check(function () { return typeof w.webapis !== 'undefined'; })) +
-        ', avplay ' + yesNo(check(function () { return !!w.webapis.avplay; })),
-      'Video: MSE ' + yesNo(check(function () { return !!w.MediaSource; })) +
-        ', H264 ' + yesNo(mseType('video/mp4; codecs="avc1.42E01E,mp4a.40.2"')) +
-        ', HEVC ' + yesNo(mseType('video/mp4; codecs="hev1.1.6.L93.B0"')) +
-        ', HLS native: ' + (hlsNative || 'no') + ', fullscreen API ' + yesNo(fullscreen),
-      'JS: Promise ' + yesNo(check(function () { return typeof w.Promise === 'function'; })) +
-        ', fetch ' + yesNo(check(function () { return typeof w.fetch === 'function'; })) +
-        ', MutationObserver ' + yesNo(check(function () { return typeof w.MutationObserver === 'function'; })) +
-        ', ES6 syntax ' + yesNo(es6Syntax),
-      'Screen: ' + check(function () { return w.innerWidth + 'x' + w.innerHeight; }) +
-        ' @' + check(function () { return w.devicePixelRatio || 1; }) +
-        '  |  history: ' + check(function () { return w.history.length; }) +
-        '  |  first page: ' + yesNo(isFirstPage())
-    ];
-  }
-
-  var capabilities = null; // computed lazily, refreshed once on window load
-
-  // ---------------------------------------------------------------------------
-  // Overlay
-  // ---------------------------------------------------------------------------
-  var box = null;
-  var overlayVisible = true;
-  var currentFontSize = 0;
-
   function baseStyle(s) {
     s.position = 'fixed';
     s.margin = '0';
     s.boxSizing = 'border-box';
-    s.fontFamily = 'monospace';
+    s.fontFamily = 'sans-serif';
     s.textAlign = 'left';
     s.fontWeight = 'normal';
     s.fontStyle = 'normal';
@@ -343,467 +209,30 @@
     s.textTransform = 'none';
     s.textShadow = 'none';
     s.opacity = '1';
+    s.lineHeight = '1.35';
   }
 
-  function createBox() {
-    box = document.createElement('div');
-    box.setAttribute('data-tvb', 'overlay');
-    var s = box.style;
-    baseStyle(s);
-    s.zIndex = '2147483647';
-    s.pointerEvents = 'none';
-    s.whiteSpace = 'pre-wrap';
-    s.wordWrap = 'break-word';
-    s.color = '#ffffff';
-    s.borderRadius = '6px';
-    s.lineHeight = '1.3';
-    if (isTop) {
-      s.top = '10px';
-      s.right = '10px';
-      s.maxWidth = '52%';
-      s.padding = '8px 10px';
-      s.background = 'rgba(170, 0, 0, 0.88)';
-    } else {
-      // Smaller green badge when running inside an iframe
-      s.top = '6px';
-      s.left = '6px';
-      s.maxWidth = '90%';
-      s.padding = '4px 8px';
-      s.fontSize = '14px';
-      s.background = 'rgba(0, 120, 0, 0.88)';
-    }
+  function makeLayer(name, zIndex) {
+    var el = document.createElement('div');
+    el.setAttribute('data-tvb', name);
+    baseStyle(el.style);
+    el.style.zIndex = String(zIndex);
+    el.style.pointerEvents = 'none';
+    return el;
   }
 
-  // Pages with a viewport (e.g. Wikipedia) are scaled: keep the overlay the same size
-  function applyScale() {
-    if (!isTop || !box) {
-      return;
-    }
-    var width = check(function () { return w.innerWidth; }) || 1920;
-    var size = width < 1900 ? Math.max(8, Math.round(14 * width / 1920)) : 14;
-    if (size !== currentFontSize) {
-      currentFontSize = size;
-      box.style.fontSize = size + 'px';
-    }
-  }
-
-  function attachBox() {
+  function attach(el) {
     var root = getRoot();
-    if (!root) {
-      return false;
+    if (root && el.parentNode !== root) {
+      root.appendChild(el);
     }
-    if (!box) {
-      createBox();
-    }
-    if (box.parentNode !== root) {
-      root.appendChild(box);
-    }
-    box.style.display = overlayVisible ? 'block' : 'none';
-    applyScale();
-    return true;
+    return !!root;
   }
 
-  function pushList(lines, title, list) {
-    lines.push(title + (list.length ? '' : 'none'));
-    for (var i = 0; i < list.length; i++) {
-      lines.push('  ' + list[i]);
+  function detach(el) {
+    if (el && el.parentNode) {
+      el.parentNode.removeChild(el);
     }
-  }
-
-  function buildText() {
-    var lines = [];
-    if (isTop) {
-      lines.push('TVB v' + VERSION + ' active on ' + currentHost() + '  |  runs in this page: ' + state.runs);
-      lines.push('URL: ' + shorten(currentHref(), 90));
-      lines.push('Start: ' + clock(startTime) + '  readyState: ' + startReadyState +
-        '  body: ' + (startHadBody ? 'yes' : 'no'));
-      if (!capabilities) {
-        capabilities = detectCapabilities();
-      }
-      for (var c = 0; c < capabilities.length; c++) {
-        lines.push(capabilities[c]);
-      }
-      lines.push('Local service (TizenBrew): ' + results.localService);
-      pushList(lines, 'Iframes: ' + iframeCount + ' in page, with TVB: ', frames);
-      lines.push('Hooks: xhr ' + yesNo(hooks.xhr) + ', fetch ' + yesNo(hooks.fetch) +
-        ', perf ' + yesNo(hooks.perf) + '  |  <video> in page: ' + videoCount);
-      pushList(lines, 'Media found (' + mediaTotal + ', segments: ' + segmentCount + '): ', media);
-      if (results.keyboard) {
-        lines.push('Keyboard: ' + results.keyboard);
-      }
-      if (results.click) {
-        lines.push('Click: ' + results.click);
-      }
-      if (results.player) {
-        lines.push('Player: ' + results.player);
-      }
-      if (results.exit) {
-        lines.push('Exit: ' + results.exit);
-      }
-      lines.push('Keys: ' + (keys.length ? keys.join(', ') : '-'));
-      pushList(lines, 'Errors: ', errors);
-      lines.push('1-5 pages | 6 keyboard | 7 click | 8 HLS native | 9 hls.js | 0 hide');
-      lines.push('RED next | YELLOW first | GREEN iframe | BLUE reload | RETURN back');
-    } else {
-      lines.push('TVB v' + VERSION + ' in IFRAME: ' + shorten(currentHost(), 50) +
-        '  runs: ' + state.runs + '  media: ' + mediaTotal + '  video: ' + videoCount);
-      if (errors.length) {
-        lines.push('Last error: ' + errors[0]);
-      }
-    }
-    return lines.join('\n');
-  }
-
-  var renderPending = false;
-
-  function render() {
-    renderPending = false;
-    if (!attachBox()) {
-      return;
-    }
-    var text = buildText();
-    if (box.textContent !== text) {
-      box.textContent = text;
-    }
-  }
-
-  function scheduleRender() {
-    if (renderPending) {
-      return;
-    }
-    renderPending = true;
-    w.setTimeout(safe(render), 30);
-  }
-
-  // Short message in the lower part of the screen
-  var notice = null;
-  var noticeTimer = null;
-
-  function showNotice(text, ms) {
-    var root = getRoot();
-    if (!root) {
-      return;
-    }
-    if (!notice) {
-      notice = document.createElement('div');
-      notice.setAttribute('data-tvb', 'notice');
-      var s = notice.style;
-      baseStyle(s);
-      s.left = '50%';
-      s.bottom = '8%';
-      s.width = '900px';
-      s.marginLeft = '-450px';
-      s.padding = '16px 20px';
-      s.fontSize = '26px';
-      s.textAlign = 'center';
-      s.color = '#000000';
-      s.background = '#ffd600';
-      s.borderRadius = '8px';
-      s.zIndex = '2147483647';
-      s.pointerEvents = 'none';
-    }
-    notice.textContent = text;
-    if (notice.parentNode !== root) {
-      root.appendChild(notice);
-    }
-    if (noticeTimer) {
-      w.clearTimeout(noticeTimer);
-    }
-    noticeTimer = w.setTimeout(safe(hideNotice), ms);
-  }
-
-  function hideNotice() {
-    if (noticeTimer) {
-      w.clearTimeout(noticeTimer);
-      noticeTimer = null;
-    }
-    if (notice && notice.parentNode) {
-      notice.parentNode.removeChild(notice);
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Communication between iframes and the main frame
-  // ---------------------------------------------------------------------------
-  function postToTop(type, data) {
-    if (isTop) {
-      return;
-    }
-    try {
-      w.top.postMessage({ __tvb: 1, type: type, data: data }, '*');
-    } catch (e) { /* ignore */ }
-  }
-
-  function reportFrame() {
-    postToTop('frame', { host: currentHost(), runs: state.runs, media: mediaTotal });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Media detection
-  // ---------------------------------------------------------------------------
-  function addMedia(url, source, fromFrame) {
-    if (!url || typeof url !== 'string') {
-      return;
-    }
-    if (mediaSeen[url]) {
-      return;
-    }
-    if (mediaSeenCount >= MAX_SEEN_URLS) {
-      mediaSeen = {};
-      mediaSeenCount = 0;
-    }
-    mediaSeen[url] = true;
-    mediaSeenCount += 1;
-    mediaTotal += 1;
-    if (SEGMENT_RE.test(url)) {
-      segmentCount += 1;
-      if (segmentCount > 1) {
-        scheduleRender(); // keep the list for manifests and files, not every segment
-        return;
-      }
-    }
-    pushLimited(media, (fromFrame ? 'iframe/' : '') + source + ' ' + shorten(url, 90));
-    if (!isTop) {
-      postToTop('media', { source: source, url: url });
-      reportFrame();
-    }
-    scheduleRender();
-  }
-
-  function installHooks() {
-    // XMLHttpRequest: record the URL, then call the original method unchanged
-    try {
-      var proto = w.XMLHttpRequest && w.XMLHttpRequest.prototype;
-      if (proto && typeof proto.open === 'function') {
-        var originalOpen = proto.open;
-        proto.open = function (method, url) {
-          try {
-            var u = String(url);
-            if (MEDIA_RE.test(u)) {
-              addMedia(absoluteUrl(u), 'xhr');
-            }
-          } catch (e) { /* never break the request */ }
-          return originalOpen.apply(this, arguments);
-        };
-        hooks.xhr = true;
-      }
-    } catch (e) { /* ignore */ }
-
-    // fetch: same approach, always calling the original with window as "this"
-    try {
-      if (typeof w.fetch === 'function') {
-        var originalFetch = w.fetch;
-        w.fetch = function (input) {
-          try {
-            var u = typeof input === 'string' ? input : (input && input.url);
-            if (u && MEDIA_RE.test(String(u))) {
-              addMedia(absoluteUrl(String(u)), 'fetch');
-            }
-          } catch (e) { /* never break the request */ }
-          return originalFetch.apply(w, arguments);
-        };
-        hooks.fetch = true;
-      }
-    } catch (e) { /* ignore */ }
-
-    // Resource timing: lists resources downloaded BEFORE the script arrived
-    try {
-      if (w.performance && typeof w.performance.getEntriesByType === 'function') {
-        if (typeof w.performance.setResourceTimingBufferSize === 'function') {
-          w.performance.setResourceTimingBufferSize(500);
-        }
-        hooks.perf = true;
-      }
-    } catch (e) { /* ignore */ }
-  }
-
-  function scanResources() {
-    if (!hooks.perf) {
-      return;
-    }
-    var entries = w.performance.getEntriesByType('resource');
-    if (entries.length < perfIndex) {
-      perfIndex = 0; // the page cleared the buffer
-    }
-    for (var i = perfIndex; i < entries.length; i++) {
-      var name = entries[i].name;
-      if (name && MEDIA_RE.test(name)) {
-        addMedia(name, 'perf');
-      }
-    }
-    perfIndex = entries.length;
-  }
-
-  function scanPage() {
-    var videos = document.getElementsByTagName('video');
-    videoCount = videos.length;
-    for (var i = 0; i < videos.length && i < MAX_VIDEOS_SCANNED; i++) {
-      var v = videos[i];
-      if (v.getAttribute('data-tvb')) {
-        continue; // our own test player
-      }
-      var src = v.currentSrc || v.src;
-      if (src) {
-        addMedia(src, src.indexOf('blob:') === 0 ? 'video(MSE blob)' : 'video');
-      }
-      var sources = v.getElementsByTagName('source');
-      for (var j = 0; j < sources.length && j < MAX_VIDEOS_SCANNED; j++) {
-        if (sources[j].src) {
-          addMedia(sources[j].src, 'source');
-        }
-      }
-    }
-    var count = document.getElementsByTagName('iframe').length;
-    iframeCount = (testFrame && testFrame.parentNode) ? count - 1 : count;
-    scanResources();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Test: can web pages reach TizenBrew's local service? (needed later for
-  // bookmarks/history shared between all websites)
-  // ---------------------------------------------------------------------------
-  function withTimeout(promise, ms) {
-    return new w.Promise(function (resolve, reject) {
-      var timer = w.setTimeout(function () {
-        reject(new Error('timeout'));
-      }, ms);
-      promise.then(function (value) {
-        w.clearTimeout(timer);
-        resolve(value);
-      }, function (err) {
-        w.clearTimeout(timer);
-        reject(err);
-      });
-    });
-  }
-
-  function testLocalService() {
-    if (typeof w.fetch !== 'function' || typeof w.Promise !== 'function') {
-      results.localService = 'not testable (no fetch/Promise)';
-      return;
-    }
-    var reach = 'testing...';
-    var read = 'testing...';
-    function update() {
-      results.localService = 'reachable ' + reach + ', readable (CORS) ' + read;
-      scheduleRender();
-    }
-    withTimeout(w.fetch(LOCAL_SERVICE_URL, { mode: 'no-cors', cache: 'no-store' }), LOCAL_SERVICE_TIMEOUT_MS)
-      .then(function () { reach = 'yes'; update(); }, function (e) {
-        reach = 'no (' + shorten(e && e.message ? e.message : e, 40) + ')';
-        update();
-      });
-    withTimeout(w.fetch(LOCAL_SERVICE_URL, { mode: 'cors', cache: 'no-store' }), LOCAL_SERVICE_TIMEOUT_MS)
-      .then(function () { read = 'yes'; update(); }, function () { read = 'no'; update(); });
-    update();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Test: on-screen keyboard (key 6)
-  // ---------------------------------------------------------------------------
-  var keyboardPanel = null;
-  var keyboardInput = null;
-
-  function openKeyboardTest() {
-    var root = getRoot();
-    if (!root || keyboardPanel) {
-      return;
-    }
-    keyboardPanel = document.createElement('div');
-    keyboardPanel.setAttribute('data-tvb', 'keyboard');
-    var s = keyboardPanel.style;
-    baseStyle(s);
-    s.left = '50%';
-    s.top = '30%';
-    s.width = '900px';
-    s.marginLeft = '-450px';
-    s.padding = '24px';
-    s.background = '#ffffff';
-    s.color = '#000000';
-    s.border = '4px solid #0057b8';
-    s.borderRadius = '10px';
-    s.zIndex = '2147483646';
-    s.fontSize = '24px';
-
-    var label = document.createElement('div');
-    label.textContent = 'Keyboard test: type something, then press RETURN to close.';
-    label.style.marginBottom = '12px';
-    keyboardPanel.appendChild(label);
-
-    keyboardInput = document.createElement('input');
-    keyboardInput.type = 'text';
-    var is = keyboardInput.style;
-    is.width = '100%';
-    is.fontSize = '30px';
-    is.padding = '8px';
-    is.boxSizing = 'border-box';
-    is.color = '#000000';
-    is.background = '#ffffff';
-    is.border = '2px solid #333333';
-    keyboardPanel.appendChild(keyboardInput);
-
-    var typedKeys = 0;
-    keyboardInput.addEventListener('input', safe(function () {
-      results.keyboard = 'open, value: "' + shorten(keyboardInput.value, 40) + '", key events: ' + typedKeys;
-      scheduleRender();
-    }));
-    keyboardInput.addEventListener('keydown', safe(function () {
-      typedKeys += 1;
-    }));
-    keyboardInput.addEventListener('blur', safe(function () {
-      if (keyboardInput) {
-        results.keyboard += ' (lost focus)';
-        scheduleRender();
-      }
-    }));
-
-    root.appendChild(keyboardPanel);
-    keyboardInput.focus();
-    results.keyboard = 'open, input focused: ' + yesNo(document.activeElement === keyboardInput) +
-      ' (did the TV keyboard appear?)';
-    scheduleRender();
-  }
-
-  function closeKeyboardTest() {
-    if (!keyboardPanel) {
-      return;
-    }
-    var value = keyboardInput ? keyboardInput.value : '';
-    keyboardInput = null;
-    if (keyboardPanel.parentNode) {
-      keyboardPanel.parentNode.removeChild(keyboardPanel);
-    }
-    keyboardPanel = null;
-    results.keyboard = 'closed, final value: "' + shorten(value, 40) + '"';
-    scheduleRender();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Test: simulated click at the center of the screen (key 7)
-  // ---------------------------------------------------------------------------
-  function showMarker(x, y) {
-    var root = getRoot();
-    if (!root) {
-      return;
-    }
-    var marker = document.createElement('div');
-    marker.setAttribute('data-tvb', 'marker');
-    var s = marker.style;
-    baseStyle(s);
-    s.left = (x - 15) + 'px';
-    s.top = (y - 15) + 'px';
-    s.width = '30px';
-    s.height = '30px';
-    s.border = '4px solid #ff00ff';
-    s.borderRadius = '50%';
-    s.zIndex = '2147483647';
-    s.pointerEvents = 'none';
-    root.appendChild(marker);
-    w.setTimeout(safe(function () {
-      if (marker.parentNode) {
-        marker.parentNode.removeChild(marker);
-      }
-    }), 1500);
   }
 
   function fireMouse(el, type, x, y) {
@@ -817,241 +246,717 @@
     el.dispatchEvent(ev);
   }
 
-  function clickCenter() {
-    var x = Math.round(w.innerWidth / 2);
-    var y = Math.round(w.innerHeight / 2);
-    var el = document.elementFromPoint(x, y);
-    showMarker(x, y);
-    if (!el) {
-      results.click = 'nothing at ' + x + ',' + y;
-    } else if ((el.tagName || '').toUpperCase() === 'IFRAME') {
-      results.click = 'iframe at ' + x + ',' + y + ' (' + hostOf(el.src) + '): cannot click inside from the page';
+  function clickElement(el, x, y) {
+    fireMouse(el, 'mousedown', x, y);
+    fireMouse(el, 'mouseup', x, y);
+    if (typeof el.click === 'function') {
+      el.click();
     } else {
+      fireMouse(el, 'click', x, y); // e.g. SVG elements
+    }
+  }
+
+  function isFirstPage() {
+    var ref = '';
+    try {
+      ref = document.referrer || '';
+    } catch (e) { /* ignore */ }
+    return !(ref.indexOf('http:') === 0 || ref.indexOf('https:') === 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Debug information
+  // ---------------------------------------------------------------------------
+  var keys = [];
+  var errors = [];
+  var frames = [];
+  var media = [];
+  var mediaSeen = {};
+  var mediaSeenCount = 0;
+  var mediaTotal = 0;
+  var segmentCount = 0;
+
+  function addError(text) {
+    pushLimited(errors, clock(new Date()) + ' ' + shorten(text, 100));
+    scheduleRender();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Messages between frames
+  // ---------------------------------------------------------------------------
+  function postTo(target, type, data) {
+    try {
+      target.postMessage({ __tvb: 1, type: type, data: data || {} }, '*');
+    } catch (e) { /* ignore */ }
+  }
+
+  function postToTop(type, data) {
+    if (!isTop) {
+      postTo(w.top, type, data);
+    }
+  }
+
+  function childFrames() {
+    var list = [];
+    var nodes = document.getElementsByTagName('iframe');
+    for (var i = 0; i < nodes.length; i++) {
+      if (!nodes[i].getAttribute('data-tvb')) {
+        list.push(nodes[i]);
+      }
+    }
+    return list;
+  }
+
+  function frameElementFor(source) {
+    var nodes = childFrames();
+    for (var i = 0; i < nodes.length; i++) {
+      try {
+        if (nodes[i].contentWindow === source) {
+          return nodes[i];
+        }
+      } catch (e) { /* ignore */ }
+    }
+    return null;
+  }
+
+  function broadcastToFrames(type, data) {
+    var nodes = childFrames();
+    for (var i = 0; i < nodes.length; i++) {
+      try {
+        postTo(nodes[i].contentWindow, type, data);
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  function reportFrame() {
+    postToTop('frame', { host: loc.hostname || loc.protocol, media: mediaTotal });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Notices (bottom of the screen)
+  // ---------------------------------------------------------------------------
+  var notice = null;
+  var noticeTimer = null;
+
+  function showNotice(text, ms) {
+    if (!notice) {
+      notice = makeLayer('notice', 2147483647);
+      var s = notice.style;
+      s.left = '50%';
+      s.bottom = '7%';
+      s.width = '1000px';
+      s.marginLeft = '-500px';
+      s.padding = '18px 24px';
+      s.fontSize = '28px';
+      s.textAlign = 'center';
+      s.color = '#ffffff';
+      s.background = 'rgba(20, 22, 28, 0.94)';
+      s.border = '2px solid #ffd600';
+      s.borderRadius = '12px';
+    }
+    notice.textContent = text;
+    attach(notice);
+    if (noticeTimer) {
+      w.clearTimeout(noticeTimer);
+    }
+    noticeTimer = w.setTimeout(safe(hideNotice), ms || 2500);
+  }
+
+  function hideNotice() {
+    if (noticeTimer) {
+      w.clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
+    detach(notice);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Spatial navigation
+  // ---------------------------------------------------------------------------
+  var current = null;   // highlighted element
+  var ring = null;      // highlight drawn on top of the page (page styles are never changed)
+  var lastCenter = null;
+
+  function isCandidate(el) {
+    if (!el || el.disabled || el.getAttribute('data-tvb')) {
+      return false;
+    }
+    var tag = el.tagName;
+    if (tag === 'INPUT' && String(el.type).toLowerCase() === 'hidden') {
+      return false;
+    }
+    var tabindex = el.getAttribute('tabindex');
+    if (tabindex !== null && Number(tabindex) < 0) {
+      var isNative = tag === 'A' || tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' ||
+        tag === 'TEXTAREA' || tag === 'IFRAME';
+      if (!isNative &&!el.hasAttribute('onclick') && !el.getAttribute('role')) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function isVisible(el) {
+    var style = w.getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0.05;
+  }
+
+  // Elements whose position is inside the viewport extended by one screen
+  function collectCandidates() {
+    var v = viewport();
+    var list = [];
+    var nodes = document.querySelectorAll(FOCUSABLE);
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!isCandidate(el)) {
+        continue;
+      }
+      var r = el.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) {
+        continue;
+      }
+      if (r.bottom < -v.h || r.top > 2 * v.h || r.right < -v.w || r.left > 2 * v.w) {
+        continue;
+      }
+      list.push({ el: el, r: r });
+    }
+    return list;
+  }
+
+  // Not hidden behind something else (only checked for elements on screen)
+  function isReachable(item) {
+    var v = viewport();
+    var r = item.r;
+    var x = Math.round(r.left + r.width / 2);
+    var y = Math.round(r.top + r.height / 2);
+    if (x < 0 || y < 0 || x >= v.w || y >= v.h) {
+      return true;
+    }
+    if (!isVisible(item.el)) {
+      return false;
+    }
+    var hit = document.elementFromPoint(x, y);
+    if (!hit) {
+      return true;
+    }
+    if (hit.getAttribute && hit.getAttribute('data-tvb')) {
+      return true;
+    }
+    return hit === item.el || item.el.contains(hit) || hit.contains(item.el);
+  }
+
+  function gap(aStart, aEnd, bStart, bEnd) {
+    return Math.max(0, Math.max(aStart, bStart) - Math.min(aEnd, bEnd));
+  }
+
+  function scoreCandidate(dir, cr, r) {
+    var cx = cr.left + cr.width / 2;
+    var cy = cr.top + cr.height / 2;
+    var rx = r.left + r.width / 2;
+    var ry = r.top + r.height / 2;
+    var primary;
+    var orth;
+    var drift;
+    if (dir === 'right') {
+      if (!(rx > cx + 1 && r.right > cr.right - 1)) { return -1; }
+      primary = Math.max(0, r.left - cr.right);
+      orth = gap(r.top, r.bottom, cr.top, cr.bottom);
+      drift = Math.abs(ry - cy);
+    } else if (dir === 'left') {
+      if (!(rx < cx - 1 && r.left < cr.left + 1)) { return -1; }
+      primary = Math.max(0, cr.left - r.right);
+      orth = gap(r.top, r.bottom, cr.top, cr.bottom);
+      drift = Math.abs(ry - cy);
+    } else if (dir === 'down') {
+      if (!(ry > cy + 1 && r.bottom > cr.bottom - 1)) { return -1; }
+      primary = Math.max(0, r.top - cr.bottom);
+      orth = gap(r.left, r.right, cr.left, cr.right);
+      drift = Math.abs(rx - cx);
+    } else {
+      if (!(ry < cy - 1 && r.top < cr.top + 1)) { return -1; }
+      primary = Math.max(0, cr.top - r.bottom);
+      orth = gap(r.left, r.right, cr.left, cr.right);
+      drift = Math.abs(rx - cx);
+    }
+    return primary + orth * 4 + drift * 0.1;
+  }
+
+  // Starting point: the highlighted element if it is on screen, otherwise a
+  // line at the edge of the screen we are moving away from.
+  function startRect(dir) {
+    var v = viewport();
+    if (inDocument(current)) {
+      var r = current.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < v.h && r.right > 0 && r.left < v.w) {
+        return r;
+      }
+    }
+    var x = lastCenter ? Math.min(Math.max(lastCenter.x, 0), v.w) : 0;
+    var y = lastCenter ? Math.min(Math.max(lastCenter.y, 0), v.h) : 0;
+    if (dir === 'down') { return { left: x, right: x, top: 0, bottom: 0, width: 0, height: 0 }; }
+    if (dir === 'up') { return { left: x, right: x, top: v.h, bottom: v.h, width: 0, height: 0 }; }
+    if (dir === 'right') { return { left: 0, right: 0, top: y, bottom: y, width: 0, height: 0 }; }
+    return { left: v.w, right: v.w, top: y, bottom: y, width: 0, height: 0 };
+  }
+
+  // Returns true when an element was highlighted or the page scrolled
+  function moveFocus(dir) {
+    var cr = startRect(dir);
+    var list = collectCandidates();
+    var scored = [];
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i].el;
+      if (el === current || (current && (el.contains(current) || current.contains(el)))) {
+        continue;
+      }
+      var score = scoreCandidate(dir, cr, list[i].r);
+      if (score >= 0) {
+        list[i].score = score;
+        scored.push(list[i]);
+      }
+    }
+    scored.sort(function (a, b) { return a.score - b.score; });
+    for (var j = 0; j < scored.length && j < 8; j++) {
+      if (isReachable(scored[j])) {
+        setCurrent(scored[j].el);
+        ensureVisible(scored[j].el);
+        return true;
+      }
+    }
+    return scrollPage(dir, null);
+  }
+
+  function setCurrent(el) {
+    current = el;
+    if (el) {
+      var r = el.getBoundingClientRect();
+      lastCenter = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+    updateRing();
+    scheduleRender();
+  }
+
+  function ensureVisible(el) {
+    var v = viewport();
+    var r = el.getBoundingClientRect();
+    var margin = 60;
+    if (r.top >= margin && r.bottom <= v.h - margin && r.left >= 0 && r.right <= v.w) {
+      return;
+    }
+    try {
+      if (typeof el.scrollIntoViewIfNeeded === 'function') {
+        el.scrollIntoViewIfNeeded(true);
+      } else {
+        el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      }
+    } catch (e) {
+      try { el.scrollIntoView(false); } catch (e2) { /* ignore */ }
+    }
+    var r2 = el.getBoundingClientRect();
+    lastCenter = { x: r2.left + r2.width / 2, y: r2.top + r2.height / 2 };
+    updateRing();
+  }
+
+  function scrollableAncestor(el, vertical) {
+    while (el && el.nodeType === 1 && el !== document.body && el !== document.documentElement) {
+      var style = w.getComputedStyle(el);
+      var overflow = vertical ? style.overflowY : style.overflowX;
+      if (overflow === 'auto' || overflow === 'scroll') {
+        if (vertical ? el.scrollHeight > el.clientHeight + 2 : el.scrollWidth > el.clientWidth + 2) {
+          return el;
+        }
+      }
+      el = el.parentNode;
+    }
+    return null;
+  }
+
+  // Scroll the area under (x, y) or under the highlighted element.
+  // Returns true when something actually moved.
+  function scrollPage(dir, point) {
+    var v = viewport();
+    var vertical = dir === 'up' || dir === 'down';
+    var amount = vertical ? Math.round(v.h * 0.5) : Math.round(v.w * 0.5);
+    if (point && point.amount) {
+      amount = point.amount;
+    }
+    var dx = dir === 'left' ? -amount : (dir === 'right' ? amount : 0);
+    var dy = dir === 'up' ? -amount : (dir === 'down' ? amount : 0);
+
+    var from = null;
+    if (point) {
+      from = document.elementFromPoint(point.x, point.y);
+    } else if (inDocument(current)) {
+      from = current;
+    } else {
+      from = document.elementFromPoint(Math.round(v.w / 2), Math.round(v.h / 2));
+    }
+    var box = scrollableAncestor(from, vertical);
+    if (box) {
+      var beforeBox = vertical ? box.scrollTop : box.scrollLeft;
+      box.scrollTop += dy;
+      box.scrollLeft += dx;
+      if ((vertical ? box.scrollTop : box.scrollLeft) !== beforeBox) {
+        updateRing();
+        return true;
+      }
+    }
+    var beforeX = w.pageXOffset;
+    var beforeY = w.pageYOffset;
+    w.scrollBy(dx, dy);
+    updateRing();
+    return w.pageXOffset !== beforeX || w.pageYOffset !== beforeY;
+  }
+
+  function updateRing() {
+    if (!ring) {
+      ring = makeLayer('ring', 2147483646);
+      ring.style.border = '4px solid #ffd600';
+      ring.style.borderRadius = '6px';
+      ring.style.boxShadow = '0 0 0 2px rgba(0, 0, 0, 0.7)';
+    }
+    if (cursorMode || !inDocument(current)) {
+      detach(ring);
+      return;
+    }
+    var r = current.getBoundingClientRect();
+    var v = viewport();
+    if (r.bottom < 0 || r.top > v.h || r.right < 0 || r.left > v.w) {
+      detach(ring);
+      return;
+    }
+    var s = ring.style;
+    s.left = Math.round(r.left - 5) + 'px';
+    s.top = Math.round(r.top - 5) + 'px';
+    s.width = Math.round(r.width + 10) + 'px';
+    s.height = Math.round(r.height + 10) + 'px';
+    attach(ring);
+  }
+
+  var ringPending = false;
+  function scheduleRing() {
+    if (ringPending) {
+      return;
+    }
+    ringPending = true;
+    w.setTimeout(safe(function () {
+      ringPending = false;
+      updateRing();
+    }), 30);
+  }
+
+  // OK on the highlighted element
+  function activate() {
+    var el = current;
+    if (!inDocument(el)) {
+      return false;
+    }
+    var r = el.getBoundingClientRect();
+    var x = Math.round(r.left + r.width / 2);
+    var y = Math.round(r.top + r.height / 2);
+    var tag = el.tagName;
+    if (tag === 'IFRAME') {
+      enterFrame(el);
+    } else if (isEditable(el)) {
+      el.focus(); // the TV keyboard opens
+    } else if (tag === 'SELECT') {
+      el.focus();
       fireMouse(el, 'mousedown', x, y);
-      fireMouse(el, 'mouseup', x, y);
-      if (typeof el.click === 'function') {
-        el.click();
-      } else {
-        fireMouse(el, 'click', x, y);
-      }
-      results.click = describeElement(el) + ' at ' + x + ',' + y + ' -> clicked';
-    }
-    scheduleRender();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Test: our own full-screen player (key 8 = native HLS, key 9 = hls.js)
-  // ---------------------------------------------------------------------------
-  var player = null;
-
-  function setPlayerResult(text) {
-    if (player) {
-      results.player = player.mode + ': ' + text +
-        (player.notes.length ? ' [' + player.notes.join(', ') + ']' : '');
-      scheduleRender();
-    }
-  }
-
-  function openPlayer(mode) {
-    var root = getRoot();
-    if (!root) {
-      return;
-    }
-    closePlayer();
-
-    var container = document.createElement('div');
-    container.setAttribute('data-tvb', 'player');
-    var s = container.style;
-    baseStyle(s);
-    s.left = '0';
-    s.top = '0';
-    s.width = '100%';
-    s.height = '100%';
-    s.background = '#000000';
-    s.zIndex = '2147483645';
-
-    var video = document.createElement('video');
-    video.setAttribute('data-tvb', 'video');
-    video.style.width = '100%';
-    video.style.height = '100%';
-    video.style.background = '#000000';
-    container.appendChild(video);
-    root.appendChild(container);
-
-    player = {
-      mode: mode,
-      container: container,
-      video: video,
-      hls: null,
-      started: new Date().getTime(),
-      notes: [],
-      timer: null
-    };
-    var current = player;
-
-    // Full screen: must be requested while handling the key press
-    try {
-      var fs = container.requestFullscreen || container.webkitRequestFullscreen;
-      if (fs) {
-        var result = fs.call(container);
-        current.notes.push('fullscreen requested');
-        if (result && typeof result.then === 'function') {
-          result.then(null, function () {
-            current.notes.push('fullscreen refused');
-          });
-        }
-      } else {
-        current.notes.push('no fullscreen API');
-      }
-    } catch (e) {
-      current.notes.push('fullscreen error');
-    }
-
-    video.addEventListener('loadedmetadata', safe(function () {
-      if (player === current) {
-        current.notes.push(video.videoWidth + 'x' + video.videoHeight);
-        setPlayerResult('metadata loaded');
-      }
-    }));
-    video.addEventListener('playing', safe(function () {
-      if (player === current) {
-        var secs = Math.round((new Date().getTime() - current.started) / 100) / 10;
-        setPlayerResult('PLAYING after ' + secs + 's' + (video.muted ? ' (muted)' : ' (with sound)'));
-      }
-    }));
-    video.addEventListener('error', safe(function () {
-      if (player === current) {
-        var code = video.error ? video.error.code : '?';
-        setPlayerResult('video error code ' + code);
-      }
-    }));
-
-    current.timer = w.setTimeout(safe(function () {
-      if (player === current && video.paused) {
-        setPlayerResult('not playing after ' + (PLAYER_TIMEOUT_MS / 1000) + 's');
-      }
-    }), PLAYER_TIMEOUT_MS);
-
-    setPlayerResult('loading...');
-    if (mode === 'native') {
-      video.src = TEST_HLS_URL;
-      startPlayback(current);
+    } else if (tag === 'A' && el.target === '_blank' && /^https?:/.test(el.href)) {
+      w.location.href = el.href; // never open new windows
     } else {
-      loadHlsJs(current);
+      if (typeof el.focus === 'function') {
+        try { el.focus(); } catch (e) { /* ignore */ }
+      }
+      clickElement(el, x, y);
     }
-  }
-
-  function startPlayback(current) {
-    var video = current.video;
-    try {
-      var p = video.play();
-      if (p && typeof p.then === 'function') {
-        p.then(null, function (err) {
-          if (player !== current) {
-            return;
-          }
-          var name = err && err.name ? err.name : 'error';
-          current.notes.push('play() rejected: ' + name);
-          if (name === 'NotAllowedError' && !video.muted) {
-            // Autoplay with sound blocked: retry muted
-            video.muted = true;
-            current.notes.push('retry muted');
-            video.play();
-          }
-          setPlayerResult('play() rejected');
-        });
-      }
-    } catch (e) {
-      current.notes.push('play() threw');
-      setPlayerResult('play() threw');
-    }
-  }
-
-  function loadHlsJs(current) {
-    function attach() {
-      if (player !== current) {
-        return;
-      }
-      if (!w.Hls) {
-        setPlayerResult('hls.js not available');
-        return;
-      }
-      if (!w.Hls.isSupported()) {
-        setPlayerResult('hls.js says MSE not supported');
-        return;
-      }
-      var hls = new w.Hls();
-      current.hls = hls;
-      hls.on(w.Hls.Events.ERROR, function (event, data) {
-        if (player === current && data && data.fatal) {
-          current.notes.push('fatal: ' + data.details);
-          setPlayerResult('hls.js fatal error');
-        }
-      });
-      hls.loadSource(TEST_HLS_URL);
-      hls.attachMedia(current.video);
-      startPlayback(current);
-    }
-
-    if (w.Hls) {
-      attach();
-      return;
-    }
-    var script = document.createElement('script');
-    script.src = HLSJS_URL;
-    script.onload = safe(function () {
-      current.notes.push('hls.js loaded');
-      attach();
-    });
-    script.onerror = safe(function () {
-      setPlayerResult('could not load hls.js (blocked by the site?)');
-    });
-    setPlayerResult('loading hls.js...');
-    (document.head || getRoot()).appendChild(script);
-  }
-
-  function closePlayer() {
-    if (!player) {
-      return;
-    }
-    var current = player;
-    player = null;
-    try {
-      if (current.timer) {
-        w.clearTimeout(current.timer);
-      }
-      current.video.pause();
-      if (current.hls) {
-        current.hls.destroy();
-      }
-      current.video.removeAttribute('src');
-      current.video.load();
-    } catch (e) { /* ignore */ }
-    try {
-      var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-      if (fsEl) {
-        var exit = document.exitFullscreen || document.webkitExitFullscreen;
-        if (exit) {
-          exit.call(document);
-        }
-      }
-    } catch (e) { /* ignore */ }
-    if (current.container.parentNode) {
-      current.container.parentNode.removeChild(current.container);
-    }
-    results.player += ' (closed)';
-    scheduleRender();
+    return true;
   }
 
   // ---------------------------------------------------------------------------
-  // RETURN on the first page: confirm, then try to exit
+  // Iframes: entering, leaving, clicks delegated from the main page
+  // ---------------------------------------------------------------------------
+  function enterFrame(frame) {
+    try { frame.focus(); } catch (e) { /* ignore */ }
+    try { postTo(frame.contentWindow, 'enter', {}); } catch (e) { /* ignore */ }
+    showNotice('Dentro il riquadro: RETURN per uscire', 2500);
+  }
+
+  function leaveFrame(frame) {
+    var active = document.activeElement;
+    if (active && active.tagName === 'IFRAME') {
+      if (!frame) {
+        frame = active;
+      }
+      try { active.blur(); } catch (e) { /* ignore */ }
+    }
+    try { w.focus(); } catch (e) { /* ignore */ }
+    if (frame) {
+      setCurrent(frame);
+    }
+  }
+
+  function clickAt(x, y) {
+    var el = document.elementFromPoint(x, y);
+    if (!el) {
+      return 'nothing';
+    }
+    if (el.tagName === 'IFRAME') {
+      var r = el.getBoundingClientRect();
+      var bx = el.clientLeft || 0;
+      var by = el.clientTop || 0;
+      postTo(el.contentWindow, 'clickAt', { x: Math.round(x - r.left - bx), y: Math.round(y - r.top - by) });
+      return 'iframe';
+    }
+    if (isEditable(el)) {
+      el.focus();
+    }
+    clickElement(el, x, y);
+    return describeElement(el);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Virtual cursor
+  // ---------------------------------------------------------------------------
+  var cursorMode = false;
+  var cursorEl = null;
+  var cursorPos = null;
+  var accel = { key: 0, time: 0, level: 1 };
+  var lastHover = 0;
+
+  function drawCursor() {
+    if (!cursorEl) {
+      cursorEl = makeLayer('cursor', 2147483647);
+      var s = cursorEl.style;
+      s.width = '30px';
+      s.height = '30px';
+      s.borderRadius = '50%';
+      s.border = '3px solid #ffffff';
+      s.background = 'rgba(0, 140, 255, 0.55)';
+      s.boxShadow = '0 0 0 2px rgba(0, 0, 0, 0.7)';
+    }
+    if (!cursorMode) {
+      detach(cursorEl);
+      return;
+    }
+    cursorEl.style.left = Math.round(cursorPos.x - 15) + 'px';
+    cursorEl.style.top = Math.round(cursorPos.y - 15) + 'px';
+    attach(cursorEl);
+  }
+
+  function setCursorMode(on) {
+    cursorMode = on;
+    if (on) {
+      var v = viewport();
+      if (!cursorPos) {
+        cursorPos = lastCenter ? { x: lastCenter.x, y: lastCenter.y } : { x: v.w / 2, y: v.h / 2 };
+      }
+      cursorPos.x = Math.min(Math.max(cursorPos.x, 0), v.w - 1);
+      cursorPos.y = Math.min(Math.max(cursorPos.y, 0), v.h - 1);
+      leaveFrame(null);
+    } else if (cursorPos) {
+      lastCenter = { x: cursorPos.x, y: cursorPos.y };
+    }
+    drawCursor();
+    updateRing();
+    broadcastToFrames('mode', { cursor: cursorMode });
+    showNotice(on ? 'Cursore attivo: frecce per muoverlo, OK per cliccare' : 'Cursore disattivato', 2200);
+    scheduleRender();
+  }
+
+  function moveCursor(code) {
+    var now = new Date().getTime();
+    if (accel.key === code && now - accel.time < 250) {
+      accel.level = Math.min(CURSOR_MAX_ACCEL, accel.level + 0.5);
+    } else {
+      accel.level = 1;
+    }
+    accel.key = code;
+    accel.time = now;
+
+    var step = CURSOR_STEP * accel.level;
+    var v = viewport();
+    var dir = DIR_BY_KEY[code];
+    var dx = dir === 'left' ? -step : (dir === 'right' ? step : 0);
+    var dy = dir === 'up' ? -step : (dir === 'down' ? step : 0);
+    var nx = cursorPos.x + dx;
+    var ny = cursorPos.y + dy;
+
+    // Pushing against an edge scrolls the area under the cursor
+    if (nx < 0 || nx > v.w - 1 || ny < 0 || ny > v.h - 1) {
+      scrollPage(dir, { x: Math.round(cursorPos.x), y: Math.round(cursorPos.y), amount: EDGE_SCROLL });
+    }
+    cursorPos.x = Math.min(Math.max(nx, 0), v.w - 1);
+    cursorPos.y = Math.min(Math.max(ny, 0), v.h - 1);
+    drawCursor();
+
+    // Hover effects (menus that open on mouse over), at most every 120 ms
+    if (now - lastHover > 120) {
+      lastHover = now;
+      var el = document.elementFromPoint(Math.round(cursorPos.x), Math.round(cursorPos.y));
+      if (el && el.tagName !== 'IFRAME') {
+        fireMouse(el, 'mousemove', cursorPos.x, cursorPos.y);
+        fireMouse(el, 'mouseover', cursorPos.x, cursorPos.y);
+      }
+    }
+  }
+
+  function cursorClick() {
+    var result = clickAt(Math.round(cursorPos.x), Math.round(cursorPos.y));
+    cursorFlash();
+    scheduleRender();
+    return result;
+  }
+
+  function cursorFlash() {
+    if (!cursorEl) {
+      return;
+    }
+    cursorEl.style.background = 'rgba(255, 214, 0, 0.9)';
+    w.setTimeout(safe(function () {
+      if (cursorEl) {
+        cursorEl.style.background = 'rgba(0, 140, 255, 0.55)';
+      }
+    }), 180);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Key guide
+  // ---------------------------------------------------------------------------
+  var guide = null;
+
+  function openGuide() {
+    if (guide) {
+      return;
+    }
+    guide = makeLayer('guide', 2147483647);
+    var s = guide.style;
+    s.left = '50%';
+    s.top = '50%';
+    s.width = '1200px';
+    s.marginLeft = '-600px';
+    s.marginTop = '-380px';
+    s.padding = '32px 40px';
+    s.background = 'rgba(20, 22, 28, 0.97)';
+    s.color = '#ffffff';
+    s.border = '2px solid #3d4150';
+    s.borderRadius = '16px';
+    s.fontSize = '26px';
+
+    var title = document.createElement('div');
+    title.textContent = 'TV Browser - tasti';
+    title.style.fontSize = '34px';
+    title.style.marginBottom = '18px';
+    guide.appendChild(title);
+
+    for (var i = 0; i < GUIDE.length; i++) {
+      var row = document.createElement('div');
+      row.style.margin = '6px 0';
+      var k = document.createElement('span');
+      k.textContent = GUIDE[i][0];
+      k.style.display = 'inline-block';
+      k.style.width = '260px';
+      k.style.color = '#ffd600';
+      var d = document.createElement('span');
+      d.textContent = GUIDE[i][1];
+      d.style.color = '#d8dae3';
+      row.appendChild(k);
+      row.appendChild(d);
+      guide.appendChild(row);
+    }
+    var foot = document.createElement('div');
+    foot.textContent = 'INFO o RETURN per chiudere  -  v' + VERSION;
+    foot.style.marginTop = '18px';
+    foot.style.fontSize = '20px';
+    foot.style.color = '#8a8d99';
+    guide.appendChild(foot);
+    attach(guide);
+  }
+
+  function closeGuide() {
+    detach(guide);
+    guide = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bookmarks: saved by the home page (fixed origin), never in the website
+  // ---------------------------------------------------------------------------
+  var pendingAdd = null;
+
+  function bookmarkUrl(mode) {
+    var title = '';
+    try {
+      title = document.title || loc.hostname;
+    } catch (e) { /* ignore */ }
+    return HOME_URL + '?mode=' + mode + '&add=' + encodeURIComponent(w.location.href) +
+      '&title=' + encodeURIComponent(shorten(title, 100));
+  }
+
+  function addBookmark() {
+    if (!/^https?:/.test(w.location.href)) {
+      showNotice('Questa pagina non può essere aggiunta ai preferiti', 2500);
+      return;
+    }
+    if (pendingAdd) {
+      return;
+    }
+    // First try without leaving the page: the home page in a hidden frame
+    var frame = document.createElement('iframe');
+    frame.setAttribute('data-tvb', 'bookmark-frame');
+    var s = frame.style;
+    s.position = 'fixed';
+    s.left = '-10px';
+    s.top = '-10px';
+    s.width = '1px';
+    s.height = '1px';
+    s.opacity = '0';
+    s.border = '0';
+    s.pointerEvents = 'none';
+    frame.src = bookmarkUrl('frame');
+    pendingAdd = {
+      frame: frame,
+      timer: w.setTimeout(safe(bookmarkFallback), BOOKMARK_TIMEOUT_MS)
+    };
+    attach(frame);
+    showNotice('Aggiungo ai preferiti...', BOOKMARK_TIMEOUT_MS);
+  }
+
+  function finishBookmark(result) {
+    if (!pendingAdd) {
+      return;
+    }
+    w.clearTimeout(pendingAdd.timer);
+    detach(pendingAdd.frame);
+    pendingAdd = null;
+    if (result === 'exists') {
+      showNotice('Già nei preferiti', 2500);
+    } else if (result === 'added') {
+      showNotice('Aggiunto ai preferiti', 2500);
+    } else {
+      showNotice('Impossibile salvare il preferito', 3000);
+    }
+  }
+
+  // The site blocked the hidden frame: save through the home page and come back
+  function bookmarkFallback() {
+    if (!pendingAdd) {
+      return;
+    }
+    detach(pendingAdd.frame);
+    pendingAdd = null;
+    showNotice('Salvo tramite la home...', 3000);
+    w.location.href = bookmarkUrl('nav');
+  }
+
+  // ---------------------------------------------------------------------------
+  // RETURN on the first page
   // ---------------------------------------------------------------------------
   var exitPending = false;
   var exitTimer = null;
 
   function askExit() {
     exitPending = true;
-    showNotice('Press RETURN again to exit. Any other key cancels.', EXIT_CONFIRM_MS);
+    showNotice('Per uscire premi EXIT sul telecomando', EXIT_CONFIRM_MS);
     if (exitTimer) {
       w.clearTimeout(exitTimer);
     }
@@ -1060,125 +965,233 @@
     }), EXIT_CONFIRM_MS);
   }
 
-  function cancelExit() {
-    exitPending = false;
-    if (exitTimer) {
-      w.clearTimeout(exitTimer);
-      exitTimer = null;
+  // ---------------------------------------------------------------------------
+  // Debug overlay (key 0) and error indicator
+  // ---------------------------------------------------------------------------
+  var debugVisible = false;
+  var debugBox = null;
+  var errorDot = null;
+
+  function buildDebugText() {
+    var lines = [];
+    lines.push('TVB v' + VERSION + ' on ' + (loc.hostname || '?') + '  |  runs: ' + (w.__TVB__ ? w.__TVB__.runs : '?'));
+    lines.push('URL: ' + shorten(w.location.href, 90));
+    lines.push('Mode: ' + (cursorMode ? 'cursor' : 'highlight') + '  |  current: ' + describeElement(current));
+    lines.push('Viewport: ' + viewport().w + 'x' + viewport().h + '  |  first page: ' + (isFirstPage() ? 'yes' : 'no'));
+    lines.push('Iframes: ' + childFrames().length + ', with TVB: ' + (frames.length ? frames.join(', ') : 'none'));
+    lines.push('Media found (' + mediaTotal + ', segments: ' + segmentCount + '):' + (media.length ? '' : ' none'));
+    for (var i = 0; i < media.length; i++) {
+      lines.push('  ' + media[i]);
     }
-    hideNotice();
+    lines.push('Keys: ' + (keys.length ? keys.join(', ') : '-'));
+    lines.push('Errors:' + (errors.length ? '' : ' none'));
+    for (var j = 0; j < errors.length; j++) {
+      lines.push('  ' + errors[j]);
+    }
+    return lines.join('\n');
   }
 
-  function tryExit() {
-    cancelExit();
-    results.exit = 'trying window.close()...';
+  function render() {
+    renderPending = false;
+    if (!isTop) {
+      return;
+    }
+    if (debugVisible) {
+      if (!debugBox) {
+        debugBox = makeLayer('debug', 2147483647);
+        var s = debugBox.style;
+        s.top = '10px';
+        s.right = '10px';
+        s.maxWidth = '55%';
+        s.padding = '8px 10px';
+        s.fontFamily = 'monospace';
+        s.fontSize = '15px';
+        s.whiteSpace = 'pre-wrap';
+        s.wordWrap = 'break-word';
+        s.color = '#ffffff';
+        s.background = 'rgba(150, 0, 0, 0.9)';
+        s.borderRadius = '6px';
+      }
+      var text = buildDebugText();
+      if (debugBox.textContent !== text) {
+        debugBox.textContent = text;
+      }
+      attach(debugBox);
+    } else {
+      detach(debugBox);
+    }
+
+    if (!errorDot) {
+      errorDot = makeLayer('error-dot', 2147483647);
+      var d = errorDot.style;
+      d.top = '12px';
+      d.right = '12px';
+      d.width = '16px';
+      d.height = '16px';
+      d.borderRadius = '50%';
+      d.background = '#e24b4a';
+      d.border = '2px solid #ffffff';
+    }
+    if (errors.length && !debugVisible) {
+      attach(errorDot);
+    } else {
+      detach(errorDot);
+    }
+  }
+
+  var renderPending = false;
+  function scheduleRender() {
+    if (renderPending || !isTop) {
+      return;
+    }
+    renderPending = true;
+    w.setTimeout(safe(render), 50);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Media detection (debug now, "extract video" later)
+  // ---------------------------------------------------------------------------
+  function addMedia(url, source, fromFrame) {
+    if (!url || typeof url !== 'string' || mediaSeen[url]) {
+      return;
+    }
+    if (mediaSeenCount >= MAX_SEEN_URLS) {
+      mediaSeen = {};
+      mediaSeenCount = 0;
+    }
+    mediaSeen[url] = true;
+    mediaSeenCount += 1;
+    mediaTotal += 1;
+    if (SEGMENT_RE.test(url)) {
+      segmentCount += 1;
+      if (segmentCount > 1) {
+        scheduleRender();
+        return;
+      }
+    }
+    pushLimited(media, (fromFrame ? 'iframe/' : '') + source + ' ' + shorten(url, 90));
+    if (!isTop) {
+      postToTop('media', { source: source, url: url });
+    }
     scheduleRender();
+  }
+
+  function absoluteUrl(url) {
     try {
-      w.close();
+      var a = document.createElement('a');
+      a.href = url;
+      return a.href;
     } catch (e) {
-      results.exit = 'window.close() threw: ' + shorten(e && e.message ? e.message : e, 40);
+      return String(url);
     }
-    // If we are still here, closing did not work
-    w.setTimeout(safe(function () {
-      if (results.exit.indexOf('trying') === 0) {
-        results.exit = 'window.close() did not work';
+  }
+
+  function installHooks() {
+    try {
+      var proto = w.XMLHttpRequest && w.XMLHttpRequest.prototype;
+      if (proto && typeof proto.open === 'function') {
+        var originalOpen = proto.open;
+        proto.open = function (method, url) {
+          try {
+            var u = String(url);
+            if (MEDIA_RE.test(u)) {
+              addMedia(absoluteUrl(u), 'xhr');
+            }
+          } catch (e) { /* never break the request */ }
+          return originalOpen.apply(this, arguments);
+        };
       }
-      showNotice('Exit is not possible from a website: press the EXIT key on the remote.', 4000);
-      scheduleRender();
-    }), 1000);
+    } catch (e) { /* ignore */ }
+
+    try {
+      if (typeof w.fetch === 'function') {
+        var originalFetch = w.fetch;
+        w.fetch = function (input) {
+          try {
+            var u = typeof input === 'string' ? input : (input && input.url);
+            if (u && MEDIA_RE.test(String(u))) {
+              addMedia(absoluteUrl(String(u)), 'fetch');
+            }
+          } catch (e) { /* never break the request */ }
+          return originalFetch.apply(w, arguments);
+        };
+      }
+    } catch (e) { /* ignore */ }
   }
 
-  // ---------------------------------------------------------------------------
-  // Test iframe (GREEN)
-  // ---------------------------------------------------------------------------
-  var testFrame = null;
-
-  function toggleTestFrame() {
-    if (testFrame && testFrame.parentNode) {
-      testFrame.parentNode.removeChild(testFrame);
-      testFrame = null;
-      return;
-    }
-    var root = getRoot();
-    if (!root) {
-      return;
-    }
-    testFrame = document.createElement('iframe');
-    testFrame.setAttribute('data-tvb', 'test-frame');
-    testFrame.src = TEST_FRAME_URL;
-    var s = testFrame.style;
-    s.position = 'fixed';
-    s.left = '10px';
-    s.bottom = '10px';
-    s.width = '640px';
-    s.height = '360px';
-    s.border = '3px solid #00aa00';
-    s.background = '#ffffff';
-    s.zIndex = '2147483646';
-    root.appendChild(testFrame);
-  }
-
-  function nextTestPage() {
-    var href = currentHref();
-    var index = -1;
-    for (var i = 0; i < TEST_PAGES.length; i++) {
-      if (href.indexOf(TEST_PAGES[i]) === 0) {
-        index = i;
-        break;
+  var perfIndex = 0;
+  function scanPage() {
+    var videos = document.getElementsByTagName('video');
+    for (var i = 0; i < videos.length && i < 20; i++) {
+      var src = videos[i].currentSrc || videos[i].src;
+      if (src) {
+        addMedia(src, src.indexOf('blob:') === 0 ? 'video(MSE blob)' : 'video');
       }
     }
-    if (index === -1 && currentHost() === 'it.wikipedia.org') {
-      index = 1;
+    if (w.performance && typeof w.performance.getEntriesByType === 'function') {
+      var entries = w.performance.getEntriesByType('resource');
+      if (entries.length < perfIndex) {
+        perfIndex = 0;
+      }
+      for (var j = perfIndex; j < entries.length; j++) {
+        if (entries[j].name && MEDIA_RE.test(entries[j].name)) {
+          addMedia(entries[j].name, 'perf');
+        }
+      }
+      perfIndex = entries.length;
     }
-    return TEST_PAGES[(index + 1) % TEST_PAGES.length];
   }
 
   // ---------------------------------------------------------------------------
-  // Remote keys
+  // Keys
   // ---------------------------------------------------------------------------
   function digitOf(code) {
     if (code >= 48 && code <= 57) {
       return code - 48;
     }
-    if (code >= 96 && code <= 105) {
-      return code - 96; // numeric keypad codes, just in case
-    }
     return -1;
   }
 
-  // Keys used by TVB. Everything else is never touched.
-  function isShortcut(code) {
-    return code === KEY_RED || code === KEY_GREEN || code === KEY_YELLOW ||
-      code === KEY_BLUE || code === KEY_BACK || digitOf(code) !== -1;
+  // Keys always handled by the main page (forwarded from iframes)
+  function isGlobalKey(code) {
+    var d = digitOf(code);
+    return code === KEY.BACK || code === KEY.GREEN || code === KEY.YELLOW ||
+      code === KEY.TOOLS || code === KEY.INFO || d === 0 || d === 8 || d === 9;
   }
 
-  // Main page only. Returns true when the key was used.
-  function handleKey(code) {
-    // Panels first: RETURN closes them, other keys go to them untouched
-    if (keyboardPanel) {
-      if (code === KEY_BACK) {
-        closeKeyboardTest();
+  function isNavKey(code) {
+    return !!DIR_BY_KEY[code] || code === KEY.OK;
+  }
+
+  // Main page. "fromFrame" is null for keys pressed in the main page, or
+  // { frame: <iframe element or null> } for keys forwarded by an iframe.
+  // Returns true when the key was used.
+  function handleKey(code, fromFrame) {
+    var digit = digitOf(code);
+
+    if (guide) {
+      if (code === KEY.INFO || digit === 9 || code === KEY.BACK) {
+        closeGuide();
         return true;
       }
-      return false;
-    }
-    if (player) {
-      if (code === KEY_BACK) {
-        closePlayer();
-        return true;
-      }
-      return false;
+      return isNavKey(code); // the page stays still while the guide is open
     }
 
-    if (exitPending) {
-      if (code === KEY_BACK) {
-        tryExit();
+    var active = document.activeElement;
+    var typing = !fromFrame && isEditable(active);
+
+    if (code === KEY.BACK) {
+      if (typing) {
+        active.blur();
         return true;
       }
-      cancelExit(); // any other key cancels and is then handled normally
-    }
-
-    if (code === KEY_BACK) {
+      if (fromFrame || (active && active.tagName === 'IFRAME')) {
+        leaveFrame(fromFrame ? fromFrame.frame : null);
+        return true;
+      }
+      if (exitPending) {
+        return true;
+      }
       if (isFirstPage()) {
         askExit();
       } else {
@@ -1187,172 +1200,186 @@
       return true;
     }
 
-    var digit = digitOf(code);
-    if (digit >= 1 && digit <= 5) {
-      w.location.href = TEST_PAGES[digit - 1];
-    } else if (digit === 6) {
-      openKeyboardTest();
-    } else if (digit === 7) {
-      clickCenter();
-    } else if (digit === 8) {
-      openPlayer('native');
-    } else if (digit === 9) {
-      openPlayer('hls.js');
+    if (typing) {
+      // Up/down leave the field; everything else (letters, digits, OK) belongs to the field
+      if (code === KEY.UP || code === KEY.DOWN) {
+        active.blur();
+        if (!cursorMode) {
+          moveFocus(DIR_BY_KEY[code]);
+        }
+        return true;
+      }
+      return false;
+    }
+
+    if (code === KEY.TOOLS || digit === 8) {
+      setCursorMode(!cursorMode);
+    } else if (code === KEY.INFO || digit === 9) {
+      openGuide();
     } else if (digit === 0) {
-      overlayVisible = !overlayVisible;
+      debugVisible = !debugVisible;
       render();
-    } else if (code === KEY_RED) {
-      w.location.href = nextTestPage();
-    } else if (code === KEY_YELLOW) {
-      w.location.href = TEST_PAGES[0];
-    } else if (code === KEY_GREEN) {
-      toggleTestFrame();
-    } else if (code === KEY_BLUE) {
-      w.location.reload();
+    } else if (code === KEY.YELLOW) {
+      w.location.href = HOME_URL;
+    } else if (code === KEY.GREEN) {
+      addBookmark();
+    } else if (DIR_BY_KEY[code]) {
+      if (cursorMode) {
+        moveCursor(code);
+      } else {
+        moveFocus(DIR_BY_KEY[code]);
+      }
+    } else if (code === KEY.OK) {
+      if (cursorMode) {
+        cursorClick();
+      } else {
+        return activate();
+      }
     } else {
       return false;
     }
     return true;
   }
 
+  // Iframe. Returns true when the key was used.
+  var frameCursorMode = false;
+  function handleFrameKey(code) {
+    if (isGlobalKey(code) || (frameCursorMode && isNavKey(code))) {
+      postToTop('key', { code: code });
+      return true;
+    }
+    if (isEditable(document.activeElement)) {
+      return false;
+    }
+    if (DIR_BY_KEY[code]) {
+      var dir = DIR_BY_KEY[code];
+      if (!moveFocus(dir)) {
+        postToTop('navEdge', { dir: dir }); // nothing more here: continue in the main page
+      }
+      return true;
+    }
+    if (code === KEY.OK) {
+      return activate();
+    }
+    return false;
+  }
+
   function onKeyDown(ev) {
     var code = ev.keyCode || ev.which || 0;
-    var name = ev.key ? ' ' + ev.key : '';
-    pushLimited(keys, code + name);
+    pushLimited(keys, code + (ev.key ? ' ' + ev.key : ''));
     scheduleRender();
-
-    // Any key other than RETURN cancels a pending exit confirmation
-    if (isTop && exitPending && code !== KEY_BACK) {
-      cancelExit();
-    }
-
-    // While typing in a text field, only RETURN is a shortcut
-    var typing = isEditable(document.activeElement) && !keyboardPanel;
-    if (!isShortcut(code) || (typing && code !== KEY_BACK)) {
-      return;
-    }
-
-    if (!isTop) {
-      // Inside an iframe: forward the key to the main page, which handles it
+    var used = isTop ? handleKey(code, null) : handleFrameKey(code);
+    if (used) {
       ev.preventDefault();
-      postToTop('key', { code: code });
-      return;
-    }
-
-    if (handleKey(code)) {
-      ev.preventDefault();
+      ev.stopPropagation();
     }
   }
 
-  try {
-    w.addEventListener('keydown', safe(onKeyDown), true);
-  } catch (e) { /* ignore */ }
-
-  // ---------------------------------------------------------------------------
-  // Messages from iframes (main frame only)
-  // ---------------------------------------------------------------------------
-  if (isTop) {
-    try {
-      w.addEventListener('message', safe(function (ev) {
-        var msg = ev && ev.data;
-        if (!msg || msg.__tvb !== 1 || !msg.data) {
-          return;
-        }
-        if (msg.type === 'frame') {
-          var host = shorten(msg.data.host, 40);
-          var label = host + ' (runs: ' + msg.data.runs + ', media: ' + msg.data.media + ')';
-          for (var i = 0; i < frames.length; i++) {
-            if (frames[i].indexOf(host + ' ') === 0) {
-              frames.splice(i, 1);
-              break;
-            }
-          }
-          pushLimited(frames, label);
-        } else if (msg.type === 'media') {
-          addMedia(String(msg.data.url), String(msg.data.source), true);
-        } else if (msg.type === 'key') {
-          var code = Number(msg.data.code);
-          pushLimited(keys, 'iframe:' + code);
-          if (isShortcut(code)) {
-            handleKey(code);
-          }
-        }
-        scheduleRender();
-      }));
-    } catch (e) { /* ignore */ }
+  // Never open new windows from links: open them in the same page
+  function onClick(ev) {
+    var a = closestTag(ev.target, 'A');
+    if (a && a.target === '_blank' && /^https?:/.test(a.href || '')) {
+      ev.preventDefault();
+      w.location.href = a.href;
+    }
   }
 
-  // ---------------------------------------------------------------------------
-  // Error capture (page errors and our own)
-  // ---------------------------------------------------------------------------
-  try {
-    w.addEventListener('error', safe(function (ev) {
-      // Ignore resource load errors (images, scripts...): they have no message
-      if (!ev || !ev.message) {
-        return;
+  function onMessage(ev) {
+    var msg = ev && ev.data;
+    if (!msg) {
+      return;
+    }
+    // Answer from the home page in the hidden bookmark frame
+    if (msg.__tvbHome === 1) {
+      if (pendingAdd && ev.source === pendingAdd.frame.contentWindow) {
+        finishBookmark(String(msg.result));
       }
-      var where = '';
-      if (ev.filename) {
-        var file = String(ev.filename).split('/').pop();
-        where = ' (' + shorten(file, 30) + ':' + (ev.lineno || '?') + ')';
+      return;
+    }
+    if (msg.__tvb !== 1 || !msg.data) {
+      return;
+    }
+    var data = msg.data;
+    if (isTop) {
+      var frame = frameElementFor(ev.source);
+      if (msg.type === 'frame') {
+        var label = shorten(String(data.host), 40);
+        for (var i = 0; i < frames.length; i++) {
+          if (frames[i] === label) {
+            frames.splice(i, 1);
+            break;
+          }
+        }
+        pushLimited(frames, label);
+        if (frame && cursorMode) {
+          postTo(frame.contentWindow, 'mode', { cursor: true });
+        }
+      } else if (msg.type === 'media') {
+        addMedia(String(data.url), String(data.source), true);
+      } else if (msg.type === 'key') {
+        var code = Number(data.code);
+        pushLimited(keys, 'iframe:' + code);
+        handleKey(code, { frame: frame });
+      } else if (msg.type === 'navEdge') {
+        leaveFrame(frame);
+        if (!cursorMode) {
+          moveFocus(String(data.dir));
+        }
       }
-      addError(ev.message + where);
-    }), true);
-
-    w.addEventListener('unhandledrejection', safe(function (ev) {
-      var reason = ev && ev.reason;
-      addError('Promise: ' + (reason && reason.message ? reason.message : reason));
-    }));
-  } catch (e) { /* ignore */ }
+      scheduleRender();
+      return;
+    }
+    // Inside an iframe: messages from the page that contains us
+    if (msg.type === 'mode') {
+      frameCursorMode = !!data.cursor;
+      broadcastToFrames('mode', data);
+    } else if (msg.type === 'clickAt') {
+      clickAt(Number(data.x), Number(data.y));
+    } else if (msg.type === 'enter') {
+      if (!inDocument(current)) {
+        moveFocus('down');
+      } else {
+        updateRing();
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Start
   // ---------------------------------------------------------------------------
+  try {
+    w.addEventListener('keydown', safe(onKeyDown), true);
+    document.addEventListener('click', safe(onClick), true);
+    w.addEventListener('message', safe(onMessage));
+    w.addEventListener('scroll', safe(scheduleRing), true);
+    w.addEventListener('resize', safe(scheduleRing));
+    w.addEventListener('error', safe(function (ev) {
+      if (!ev || !ev.message) {
+        return; // resource load errors
+      }
+      var file = ev.filename ? ' (' + shorten(String(ev.filename).split('/').pop(), 30) + ':' + (ev.lineno || '?') + ')' : '';
+      addError(ev.message + file);
+    }), true);
+  } catch (e) { /* ignore */ }
+
   installHooks();
-
-  state.onRepeat = safe(function () {
-    reportFrame();
-    scheduleRender();
-  });
-
-  var tries = 0;
-  function waitForRoot() {
-    if (attachBox()) {
-      scanPage();
-      render();
-      reportFrame();
-      return;
-    }
-    tries += 1;
-    if (tries < ATTACH_MAX_TRIES) {
-      w.setTimeout(safe(waitForRoot), ATTACH_RETRY_MS);
-    }
-  }
-
-  safe(waitForRoot)();
-
-  if (isTop) {
-    safe(testLocalService)();
-  }
-
+  reportFrame();
   try {
-    document.addEventListener('DOMContentLoaded', safe(function () {
-      render();
-      reportFrame();
-    }));
+    document.addEventListener('DOMContentLoaded', safe(reportFrame));
+    w.addEventListener('load', safe(reportFrame));
   } catch (e) { /* ignore */ }
 
-  try {
-    w.addEventListener('load', safe(function () {
-      capabilities = null;
-      scheduleRender();
-      reportFrame();
-    }));
-  } catch (e) { /* ignore */ }
-
-  // Light periodic work: scan the page, keep the overlay up to date and attached
   w.setInterval(safe(function () {
     scanPage();
-    render();
+    if (current && !inDocument(current)) {
+      current = null;
+    }
+    updateRing();
+    if (cursorMode) {
+      drawCursor();
+    }
+    if (debugVisible || errors.length) {
+      render();
+    }
   }), TICK_MS);
 })();

@@ -62,21 +62,24 @@ Host PC IP is `127.0.0.1`. Without this setting, website mods like TVB do not wo
 1. In TizenBrew, open the **module manager** and choose **add GitHub module**.
 2. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.0.2
+   tvbrew-mods/tvb@v0.1.0
    ```
-3. Go back to the TizenBrew home screen and launch **TV Browser (test)**.
+3. Go back to the TizenBrew home screen and launch **TV Browser**.
+4. The TVB home page opens. Press **INFO** (or **9**) at any time to see all the remote keys.
 
 Specifying the version prevents an old cached copy from being loaded.
-
-> More detailed instructions for the finished app will be added here.
+When you update TVB, remove the old version from the module manager and add the new one.
 
 ## Troubleshooting
 
-- **The module does nothing when pressing OK:** make sure you added the latest version
-  (see [step 6](#6-install-tvb)) and remove older TVB versions from the module manager.
-- **The TVB overlay disappeared after pressing Home and coming back:** pressing Home only suspends TizenBrew,
-  and the connection TizenBrew uses to inject TVB is lost. Restart the TV (hold the power button on the remote
-  until the logo appears), then open TizenBrew again.
+- **The module does nothing when pressing OK:** your TV may not accept the TOOLS and INFO keys.
+  Remove the module and add `tvbrew-mods/tvb@v0.1.0-safe` instead (use 8 and 9 instead of TOOLS and INFO).
+  Also make sure older TVB versions are removed from the module manager.
+- **The home page says "Funzioni sui siti non attive" (website features not active):** TizenBrew is not injecting
+  TVB into websites. Press **EXIT**, wait a few seconds and open TizenBrew again. If it keeps happening,
+  restart the TV (hold the power button on the remote until the logo appears).
+- **Use EXIT, not Home, to leave:** Home only suspends TizenBrew, and when you come back the website features
+  may not work until you exit with EXIT and reopen it.
 
 ## Safety and how to undo everything
 
@@ -85,4 +88,4 @@ Specifying the version prevents an old cached copy from being loaded.
 - **TizenBrew** can be uninstalled like any other app.
 - **TVB** can be removed from the TizenBrew module manager.
 - No firmware changes, no rooting, no system modifications are involved.
-- To exit TVB at any time, use the **Home** or **Back/Exit** key: TVB never blocks them.
+- To exit TVB at any time, use the **EXIT** key: TVB never blocks it (nor Home, volume, channels or power).
