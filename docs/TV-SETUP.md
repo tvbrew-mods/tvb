@@ -62,13 +62,21 @@ Host PC IP is `127.0.0.1`. Without this setting, website mods like TVB do not wo
 1. In TizenBrew, open the **module manager** and choose **add GitHub module**.
 2. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.0.1
+   tvbrew-mods/tvb@v0.0.2
    ```
 3. Go back to the TizenBrew home screen and launch **TV Browser (test)**.
 
 Specifying the version prevents an old cached copy from being loaded.
 
 > More detailed instructions for the finished app will be added here.
+
+## Troubleshooting
+
+- **The module does nothing when pressing OK:** make sure you added the latest version
+  (see [step 6](#6-install-tvb)) and remove older TVB versions from the module manager.
+- **The TVB overlay disappeared after pressing Home and coming back:** pressing Home only suspends TizenBrew,
+  and the connection TizenBrew uses to inject TVB is lost. Restart the TV (hold the power button on the remote
+  until the logo appears), then open TizenBrew again.
 
 ## Safety and how to undo everything
 

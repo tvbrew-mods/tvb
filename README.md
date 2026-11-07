@@ -30,7 +30,7 @@ New to TizenBrew? Follow the step-by-step [TV setup guide](docs/TV-SETUP.md).
 2. Go to the **module manager** and choose **add GitHub module**.
 3. Type the module name, including the version:
    ```
-   tvbrew-mods/tvb@v0.0.1
+   tvbrew-mods/tvb@v0.0.2
    ```
 4. Go back to the TizenBrew home screen and launch **TV Browser (test)**.
 
